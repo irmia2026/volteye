@@ -53,18 +53,17 @@ func (p *overviewPanel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return p, nil
 }
 
-func statCard(value, label string, width int) string {
+func statCard(value, label string, innerW int) string {
 	v := stAccentBold.Render(value)
 	l := stMuted.Render(label)
 	inner := lipgloss.NewStyle().
-		Width(width - 4).
+		Width(innerW).
 		Align(lipgloss.Center).
-		Render(v + "\n" + l)
+		Render(v + "\n\n" + l)
 	return lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(colFaint).
-		Padding(1, 1).
-		Width(width - 2).
+		Padding(0, 1).
 		Render(inner)
 }
 
@@ -75,15 +74,15 @@ func (p *overviewPanel) View() string {
 	counts, _ := p.st.GroupMessageCounts()
 	latest, _ := p.st.LatestTimes()
 
-	cardW := max(14, (p.w-10)/4)
+	innerW := max(10, (p.w-22)/4)
 	cards := lipgloss.JoinHorizontal(lipgloss.Top,
-		statCard(fmt.Sprintf("%d", len(monitored)), "监控群", cardW),
+		statCard(fmt.Sprintf("%d", len(monitored)), "监控群", innerW),
 		"  ",
-		statCard(fmt.Sprintf("%d", total), "落盘消息", cardW),
+		statCard(fmt.Sprintf("%d", total), "落盘消息", innerW),
 		"  ",
-		statCard(fmt.Sprintf("%d", matched), "规则匹配", cardW),
+		statCard(fmt.Sprintf("%d", matched), "规则匹配", innerW),
 		"  ",
-		statCard(compactAgo(p.lastPoll), "最近轮询", cardW),
+		statCard(compactAgo(p.lastPoll), "最近轮询", innerW),
 	)
 
 	type grow struct {

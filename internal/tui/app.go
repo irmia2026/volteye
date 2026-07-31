@@ -238,6 +238,12 @@ func (m *rootModel) View() string {
 
 	main := lipgloss.JoinHorizontal(lipgloss.Top, sidebar, body)
 
+	mainH := m.height - 4
+	if mainH < 3 {
+		mainH = 3
+	}
+	main = lipgloss.NewStyle().Height(mainH).MaxHeight(mainH).Render(main)
+
 	status := "  " + stDot.Render("●") + stStatus.Render(" 采集中")
 	if !m.lastPoll.IsZero() {
 		status += stStatus.Render(" · 轮询 " + compactAgo(m.lastPoll))
