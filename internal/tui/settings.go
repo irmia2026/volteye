@@ -209,7 +209,7 @@ func (p *settingsPanel) row(idx int, label, value string) string {
 
 func (p *settingsPanel) View() string {
 	var sb strings.Builder
-	sb.WriteString("\n  " + stPanelTitle.Render("运行设置") + "\n\n")
+	sb.WriteString(styleTitle.Render("运行设置") + "\n")
 	sb.WriteString(p.row(0, "轮询间隔", p.intervals[p.intIdx].String()) + "\n")
 	sb.WriteString(p.row(1, "消息保留", p.daysLabel()) + "\n")
 	sb.WriteString(p.row(2, "存储容量", p.mbLabel()) + "\n")

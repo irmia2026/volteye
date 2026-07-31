@@ -35,7 +35,7 @@ func (p *overviewPanel) SetSize(w, h int)    { p.w, p.h = w, h }
 
 func (p *overviewPanel) Init() tea.Cmd {
 	return func() tea.Msg {
-		rows, _ := p.st.QueryMessages(store.MessageFilter{OnlyMatched: true, Limit: 12})
+		rows, _ := p.st.QueryMessages(store.MessageFilter{OnlyMatched: true, Limit: 8})
 		return overviewMatchedMsg{rows: rows}
 	}
 }
@@ -53,18 +53,10 @@ func (p *overviewPanel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return p, nil
 }
 
-func statCard(value, label string, innerW int) string {
+func statBlock(value, label string, width int) string {
 	v := stAccentBold.Render(value)
 	l := stMuted.Render(label)
-	inner := lipgloss.NewStyle().
-		Width(innerW).
-		Align(lipgloss.Center).
-		Render(v + "\n\n" + l)
-	return lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(colFaint).
-		Padding(0, 1).
-		Render(inner)
+	return lipgloss.NewStyle().Width(width).Render(v + "\n" + l)
 }
 
 func (p *overviewPanel) View() string {
@@ -74,15 +66,12 @@ func (p *overviewPanel) View() string {
 	counts, _ := p.st.GroupMessageCounts()
 	latest, _ := p.st.LatestTimes()
 
-	innerW := max(10, (p.w-22)/4)
-	cards := lipgloss.JoinHorizontal(lipgloss.Top,
-		statCard(fmt.Sprintf("%d", len(monitored)), "监控群", innerW),
-		"  ",
-		statCard(fmt.Sprintf("%d", total), "落盘消息", innerW),
-		"  ",
-		statCard(fmt.Sprintf("%d", matched), "规则匹配", innerW),
-		"  ",
-		statCard(compactAgo(p.lastPoll), "最近轮询", innerW),
+	bw := max(12, (p.w-4)/4)
+	stats := lipgloss.JoinHorizontal(lipgloss.Top,
+		statBlock(fmt.Sprintf("%d", len(monitored)), "监控群", bw),
+		statBlock(fmt.Sprintf("%d", total), "落盘消息", bw),
+		statBlock(fmt.Sprintf("%d", matched), "规则匹配", bw),
+		statBlock(compactAgo(p.lastPoll), "最近轮询", bw),
 	)
 
 	type grow struct {
@@ -96,16 +85,10 @@ func (p *overviewPanel) View() string {
 	}
 	sort.Slice(grows, func(i, j int) bool { return grows[i].last > grows[j].last })
 
-	sectionH := p.h - lipgloss.Height(cards) - 4
-	if sectionH < 4 {
-		sectionH = 4
-	}
-	listH := sectionH - 2
-
 	var left strings.Builder
-	left.WriteString("  " + stTableHead.Render("分群落盘") + "\n")
-	left.WriteString("  " + rule(min(36, p.w/2-6)) + "\n")
-	limit := min(len(grows), max(1, listH))
+	left.WriteString(stTableHead.Render("  分群落盘") + "\n")
+	left.WriteString("  " + rule(min(34, p.w/2-4)) + "\n")
+	limit := min(len(grows), max(1, p.h-9))
 	for i := 0; i < limit; i++ {
 		g := grows[i]
 		ago := ""
@@ -119,13 +102,10 @@ func (p *overviewPanel) View() string {
 	if len(grows) == 0 {
 		left.WriteString("  " + stMuted.Render("暂无监控群，到「群管理」勾选") + "\n")
 	}
-	for i := lipgloss.Height(left.String()); i < sectionH; i++ {
-		left.WriteString("\n")
-	}
 
 	var right strings.Builder
-	right.WriteString("  " + stTableHead.Render("最近匹配") + "\n")
-	right.WriteString("  " + rule(min(36, p.w/2-6)) + "\n")
+	right.WriteString(stTableHead.Render("  最近匹配") + "\n")
+	right.WriteString("  " + rule(min(34, p.w/2-4)) + "\n")
 	if len(p.matched) == 0 {
 		right.WriteString("  " + stMuted.Render("暂无匹配消息") + "\n")
 	}
@@ -140,14 +120,11 @@ func (p *overviewPanel) View() string {
 			stAccent.Render(padRunes(group, 10)) + " " +
 			stInk.Render(preview) + "\n")
 	}
-	for i := lipgloss.Height(right.String()); i < sectionH; i++ {
-		right.WriteString("\n")
-	}
 
-	colW := max(30, (p.w-6)/2)
+	colW := max(30, (p.w-4)/2)
 	l := lipgloss.NewStyle().Width(colW).Render(left.String())
 	r := lipgloss.NewStyle().Width(colW).Render(right.String())
-	return "\n  " + cards + "\n\n" + lipgloss.JoinHorizontal(lipgloss.Top, l, r)
+	return stats + "\n\n" + lipgloss.JoinHorizontal(lipgloss.Top, l, r)
 }
 
 func padRunes(s string, width int) string {
