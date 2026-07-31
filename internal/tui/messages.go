@@ -8,6 +8,7 @@ import (
 	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 
 	"volteye/internal/store"
 	"volteye/internal/wechatdb"
@@ -55,7 +56,7 @@ func (p *messagesPanel) Init() tea.Cmd       { return p.reload }
 func (p *messagesPanel) SetSize(w, h int) {
 	p.w, p.h = w, h
 	p.vp.Width = w - 2
-	p.vp.Height = h - 4
+	p.vp.Height = h - 3
 	p.filter.Width = w - 10
 	p.renderRows()
 }
@@ -202,13 +203,16 @@ func (p *messagesPanel) View() string {
 		flags = append(flags, stMuted.Render("过滤:"+p.filterText))
 	}
 	if p.follow {
-		flags = append(flags, stFaint.Render("跟随"))
+		flags = append(flags, stOk.Render("● 跟随"))
 	}
-	head := ""
-	if len(flags) > 0 {
-		head = "  " + strings.Join(flags, " · ") + "\n"
+	left := strings.Join(flags, "  ·  ")
+	right := stFaint.Render(fmt.Sprintf("最近 %d 条", len(p.rows)))
+	gap := p.w - lipgloss.Width(left) - lipgloss.Width(right) - 6
+	if gap < 1 {
+		gap = 1
 	}
-	head += stFaint.Render(fmt.Sprintf("  最近 %d 条", len(p.rows))) + "\n"
+	head := "  " + left + strings.Repeat(" ", gap) + right + "\n"
+	head += "  " + rule(p.w-4) + "\n"
 	body := p.vp.View()
 	if p.filtering {
 		body += "\n  " + p.filter.View()

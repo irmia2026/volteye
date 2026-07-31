@@ -6,6 +6,7 @@ import (
 
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 
 	"volteye/internal/store"
 )
@@ -65,7 +66,7 @@ func (p *groupsPanel) current() *store.Group {
 }
 
 func (p *groupsPanel) pageSize() int {
-	if n := p.h - 5; n > 1 {
+	if n := p.h - 6; n > 1 {
 		return n
 	}
 	return 10
@@ -164,6 +165,7 @@ func (p *groupsPanel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (p *groupsPanel) View() string {
 	var sb strings.Builder
+	sb.WriteString("\n")
 	header := fmt.Sprintf("   %s %s %s %s %s",
 		padRunes("监控", 4), padRunes("回填", 4), padRunes("群名 / 备注", 28),
 		padRunes("群 wxid", 30), "已存")
@@ -171,7 +173,7 @@ func (p *groupsPanel) View() string {
 	sb.WriteString("  " + rule(min(p.w-4, 90)) + "\n")
 
 	if len(p.groups) == 0 {
-		sb.WriteString("  " + stMuted.Render("没有群聊记录") + "\n")
+		sb.WriteString("\n  " + stMuted.Render("没有群聊记录") + "\n")
 		return sb.String()
 	}
 	end := min(len(p.groups), p.offset+p.pageSize())
@@ -203,7 +205,20 @@ func (p *groupsPanel) View() string {
 		}
 		sb.WriteString(line + "\n")
 	}
-	sb.WriteString("\n  " + stFaint.Render(fmt.Sprintf("%d/%d 群 · ● 监控 %d 群",
+
+	used := lipgloss.Height(sb.String())
+	footerH := 2
+	if p.editing {
+		footerH++
+	}
+	if p.status != "" {
+		footerH++
+	}
+	for i := used; i < p.h-footerH; i++ {
+		sb.WriteString("\n")
+	}
+
+	sb.WriteString("  " + stFaint.Render(fmt.Sprintf("%d/%d 群 · ● 监控 %d 群",
 		p.cursor+1, len(p.groups), countMonitored(p.groups))))
 	if p.editing {
 		sb.WriteString("\n  " + stLabel.Render("备注: ") + p.input.View())

@@ -6,6 +6,7 @@ import (
 
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 
 	"volteye/internal/extract"
 	"volteye/internal/store"
@@ -221,6 +222,7 @@ func (p *rulesPanel) updateForm(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 func (p *rulesPanel) View() string {
 	var sb strings.Builder
+	sb.WriteString("\n")
 	header := fmt.Sprintf("   %s %s %s %s",
 		padRunes("启用", 4), padRunes("名称", 16), padRunes("关键词", 36), "正则")
 	sb.WriteString("  " + stTableHead.Render(header) + "\n")
@@ -228,7 +230,7 @@ func (p *rulesPanel) View() string {
 	if len(p.rules) == 0 {
 		sb.WriteString("  " + stMuted.Render("暂无规则，按 n 新建") + "\n")
 	}
-	pageSize := max(1, p.h-8)
+	pageSize := max(1, p.h-7)
 	if p.cursor < p.offset {
 		p.offset = p.cursor
 	}
@@ -254,14 +256,25 @@ func (p *rulesPanel) View() string {
 		}
 		sb.WriteString(line + "\n")
 	}
+	used := lipgloss.Height(sb.String())
+	footerH := 1
 	if p.form != nil {
-		sb.WriteString("\n  " + stPanelTitle.Render("新建规则") + "\n")
+		footerH += 5
+	}
+	if p.status != "" {
+		footerH++
+	}
+	for i := used; i < p.h-footerH; i++ {
+		sb.WriteString("\n")
+	}
+	if p.form != nil {
+		sb.WriteString("  " + stPanelTitle.Render("新建规则") + "\n")
 		sb.WriteString("  名称:   " + p.form.name.View() + "\n")
 		sb.WriteString("  关键词: " + p.form.kws.View() + "\n")
 		sb.WriteString("  正则:   " + p.form.re.View() + "\n")
 	}
 	if p.status != "" {
-		sb.WriteString("\n  " + styleBad.Render(p.status))
+		sb.WriteString("\n  " + stBad.Render(p.status))
 	}
 	return sb.String()
 }

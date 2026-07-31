@@ -178,7 +178,7 @@ func (p *exportPanel) optionLine(idx int, label, value string) string {
 
 func (p *exportPanel) View() string {
 	var sb strings.Builder
-	sb.WriteString(styleTitle.Render("导出设置") + "\n")
+	sb.WriteString("\n  " + stPanelTitle.Render("导出设置") + "\n\n")
 	groupLabel := "全部监控群"
 	if p.groupIdx > 0 && p.groupIdx-1 < len(p.groups) {
 		g := p.groups[p.groupIdx-1]
@@ -196,7 +196,7 @@ func (p *exportPanel) View() string {
 		sb.WriteString("\n  " + styleGood.Render(p.status) + "\n")
 	}
 
-	sb.WriteString("\n" + styleTitle.Render("导出历史") + "\n")
+	sb.WriteString("\n\n  " + stPanelTitle.Render("导出历史") + "\n")
 	if len(p.files) == 0 {
 		sb.WriteString(styleMuted.Render("  暂无导出文件") + "\n")
 	}
