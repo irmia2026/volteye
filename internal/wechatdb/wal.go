@@ -60,31 +60,50 @@ func DecryptWAL(rawKey []byte, encMainPath, walPath, dstPath string) (int, error
 	if pageSize != PageSize {
 		return 0, fmt.Errorf("unexpected wal page size %d", pageSize)
 	}
+	salt1 := binary.BigEndian.Uint32(data[16:20])
+	salt2 := binary.BigEndian.Uint32(data[20:24])
 
-	out := make([]byte, len(data))
-	copy(out, data)
+	frameBytes := walFrameHdr + pageSize
+	frameCount := (len(data) - walHeaderSize) / frameBytes
+	first := -1
+	for i := 0; i < frameCount; i++ {
+		fh := data[walHeaderSize+i*frameBytes:]
+		if binary.BigEndian.Uint32(fh[8:12]) == salt1 && binary.BigEndian.Uint32(fh[12:16]) == salt2 {
+			first = i
+			break
+		}
+	}
+	if first < 0 {
+		os.Remove(dstPath)
+		return 0, nil
+	}
 
-	s1, s2 := walChecksum(out[0:24], 0, 0, bigEndian)
-	frames := 0
-	pos := walHeaderSize
-	for pos+walFrameHdr+pageSize <= len(data) {
-		hdr := data[pos : pos+walFrameHdr]
-		page := data[pos+walFrameHdr : pos+walFrameHdr+pageSize]
-		pn := binary.BigEndian.Uint32(hdr[0:4])
+	out := make([]byte, walHeaderSize+(frameCount-first)*frameBytes)
+	copy(out, data[:walHeaderSize])
+
+	s1 := binary.BigEndian.Uint32(data[24:28])
+	s2 := binary.BigEndian.Uint32(data[28:32])
+	written := 0
+	for i := first; i < frameCount; i++ {
+		srcOff := walHeaderSize + i*frameBytes
+		dstOff := walHeaderSize + written*frameBytes
+		fh := data[srcOff : srcOff+walFrameHdr]
+		page := data[srcOff+walFrameHdr : srcOff+frameBytes]
+		pn := binary.BigEndian.Uint32(fh[0:4])
 		plain, err := DecryptPage(encKey, page, pn)
 		if err != nil {
-			return frames, fmt.Errorf("wal frame %d page %d: %w", frames, pn, err)
+			return written, fmt.Errorf("wal frame %d page %d: %w", i, pn, err)
 		}
-		copy(out[pos+walFrameHdr:], plain)
-		s1, s2 = walChecksum(out[pos:pos+8], s1, s2, bigEndian)
-		s1, s2 = walChecksum(out[pos+walFrameHdr:pos+walFrameHdr+pageSize], s1, s2, bigEndian)
-		binary.BigEndian.PutUint32(out[pos+16:], s1)
-		binary.BigEndian.PutUint32(out[pos+20:], s2)
-		frames++
-		pos += walFrameHdr + pageSize
+		copy(out[dstOff:dstOff+walFrameHdr], fh)
+		copy(out[dstOff+walFrameHdr:dstOff+frameBytes], plain)
+		s1, s2 = walChecksum(out[dstOff:dstOff+8], s1, s2, bigEndian)
+		s1, s2 = walChecksum(out[dstOff+walFrameHdr:dstOff+frameBytes], s1, s2, bigEndian)
+		binary.BigEndian.PutUint32(out[dstOff+16:], s1)
+		binary.BigEndian.PutUint32(out[dstOff+20:], s2)
+		written++
 	}
 	if err := os.WriteFile(dstPath, out, 0644); err != nil {
-		return frames, err
+		return written, err
 	}
-	return frames, nil
+	return written, nil
 }

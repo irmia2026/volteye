@@ -74,6 +74,8 @@ func (c *Collector) log(format string, args ...any) {
 	}
 }
 
+func walSigKey(src string) string { return src + "-wal" }
+
 func sigOf(path string) (fileSig, bool) {
 	st, err := os.Stat(path)
 	if err != nil {
@@ -114,10 +116,11 @@ func (c *Collector) refresh() {
 					continue
 				}
 				os.Remove(decPath + "-wal")
+				delete(c.sigs, walSigKey(src))
 			}
 		}
 
-		walSrc := src + "-wal"
+		walSrc := walSigKey(src)
 		if sig, ok := sigOf(walSrc); ok {
 			if prev, seen := c.sigs[walSrc]; !seen || prev != sig {
 				c.sigs[walSrc] = sig
