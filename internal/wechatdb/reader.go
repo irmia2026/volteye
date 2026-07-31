@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"fmt"
+	"os"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -265,4 +266,140 @@ func Preview(s string, max int) string {
 	}
 	r := []rune(s)
 	return string(r[:max]) + "..."
+}
+
+func ListChatTableNames(db *sql.DB) ([]string, error) {
+	rows, err := db.Query(`SELECT name FROM sqlite_master WHERE type='table' AND name LIKE 'Msg\_%' ESCAPE '\'`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			return nil, err
+		}
+		out = append(out, name)
+	}
+	return out, rows.Err()
+}
+
+func ReadMessagesSince(db *sql.DB, table string, createTime, sortSeq, localID int64, limit int) ([]Message, error) {
+	cols := tableColumns(db, table)
+	if !cols["local_id"] || !cols["create_time"] {
+		return nil, fmt.Errorf("table %s missing expected columns", table)
+	}
+	want := []string{"local_id", "server_id", "local_type", "sort_seq", "create_time", "real_sender_id", "message_content", "compress_content"}
+	var sel []string
+	for _, w := range want {
+		if cols[w] {
+			sel = append(sel, w)
+		}
+	}
+	q := `SELECT ` + strings.Join(sel, ", ") + ` FROM ` + quoteIdent(table) +
+		` WHERE create_time > ? OR (create_time = ? AND sort_seq > ?) OR (create_time = ? AND sort_seq = ? AND local_id > ?)` +
+		` ORDER BY create_time ASC, sort_seq ASC, local_id ASC LIMIT ?`
+	rows, err := db.Query(q, createTime, createTime, sortSeq, createTime, sortSeq, localID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanMessages(rows, sel)
+}
+
+func LatestCursor(db *sql.DB, table string) (int64, int64, int64, error) {
+	var ct, ss, lid int64
+	q := `SELECT create_time, sort_seq, local_id FROM ` + quoteIdent(table) +
+		` ORDER BY create_time DESC, sort_seq DESC, local_id DESC LIMIT 1`
+	err := db.QueryRow(q).Scan(&ct, &ss, &lid)
+	if err == sql.ErrNoRows {
+		return 0, 0, 0, nil
+	}
+	return ct, ss, lid, err
+}
+
+func scanMessages(rows *sql.Rows, sel []string) ([]Message, error) {
+	var msgs []Message
+	for rows.Next() {
+		vals := make([]any, len(sel))
+		ptrs := make([]any, len(sel))
+		for i := range vals {
+			ptrs[i] = &vals[i]
+		}
+		if err := rows.Scan(ptrs...); err != nil {
+			return nil, err
+		}
+		var m Message
+		var msgRaw, compressRaw any
+		for i, col := range sel {
+			switch col {
+			case "local_id":
+				m.LocalID = toInt64(vals[i])
+			case "server_id":
+				m.ServerID = toInt64(vals[i])
+			case "local_type":
+				m.LocalType = toInt64(vals[i])
+			case "sort_seq":
+				m.SortSeq = toInt64(vals[i])
+			case "create_time":
+				m.CreateTime = toInt64(vals[i])
+			case "real_sender_id":
+				m.SenderID = toInt64(vals[i])
+			case "message_content":
+				msgRaw = vals[i]
+			case "compress_content":
+				compressRaw = vals[i]
+			}
+		}
+		m.Content = DecodeContent(compressRaw, msgRaw)
+		msgs = append(msgs, m)
+	}
+	return msgs, rows.Err()
+}
+
+func FindContactDB(dbStorage string) string {
+	for _, p := range []string{
+		filepath.Join(dbStorage, "contact", "contact.db"),
+		filepath.Join(dbStorage, "contact.db"),
+	} {
+		if st, err := os.Stat(p); err == nil && !st.IsDir() {
+			return p
+		}
+	}
+	return ""
+}
+
+func ChatroomNames(contactDB *sql.DB) map[string]string {
+	out := map[string]string{}
+	for _, table := range []string{"contact", "contacts", "Contact"} {
+		cols := tableColumns(contactDB, table)
+		if !cols["username"] {
+			continue
+		}
+		nameCol := ""
+		for _, c := range []string{"nick_name", "nickname", "NickName"} {
+			if cols[strings.ToLower(c)] {
+				nameCol = c
+				break
+			}
+		}
+		if nameCol == "" {
+			continue
+		}
+		rows, err := contactDB.Query(`SELECT username, ` + quoteIdent(nameCol) + ` FROM ` + quoteIdent(table) + ` WHERE username LIKE '%@chatroom'`)
+		if err != nil {
+			continue
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var u string
+			var n sql.NullString
+			if err := rows.Scan(&u, &n); err == nil {
+				out[u] = n.String
+			}
+		}
+		return out
+	}
+	return out
 }
