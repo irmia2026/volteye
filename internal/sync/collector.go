@@ -12,11 +12,12 @@ import (
 )
 
 type Config struct {
-	DBStorage string
-	Key       []byte
-	Interval  time.Duration
-	WorkDir   string
-	Logf      func(string)
+	DBStorage  string
+	Key        []byte
+	Interval   time.Duration
+	WorkDir    string
+	Logf       func(string)
+	OnPollDone func(inserted int)
 }
 
 type fileSig struct {
@@ -235,10 +236,19 @@ func (c *Collector) syncGroup(g store.Group) (int, error) {
 	return inserted, nil
 }
 
-func (c *Collector) Run(ctx context.Context) error {
-	if _, err := c.PollOnce(); err != nil {
+func (c *Collector) poll() {
+	n, err := c.PollOnce()
+	if err != nil {
 		c.log("poll error: %v", err)
+		return
 	}
+	if c.cfg.OnPollDone != nil {
+		c.cfg.OnPollDone(n)
+	}
+}
+
+func (c *Collector) Run(ctx context.Context) error {
+	c.poll()
 	interval := c.cfg.Interval
 	if interval <= 0 {
 		interval = 3 * time.Second
@@ -250,9 +260,7 @@ func (c *Collector) Run(ctx context.Context) error {
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-ticker.C:
-			if _, err := c.PollOnce(); err != nil {
-				c.log("poll error: %v", err)
-			}
+			c.poll()
 		}
 	}
 }
