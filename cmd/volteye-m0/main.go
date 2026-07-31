@@ -20,6 +20,8 @@ func main() {
 		dbStorage = flag.String("dbstorage", "", "db_storage directory path (auto-detect if empty)")
 		group     = flag.String("group", "", "group wxid ending with @chatroom to dump messages from")
 		keyHex    = flag.String("key", "", "64-hex-char db key (skip memory scan)")
+		dllPath   = flag.String("dll", "", "Weixin.dll path (auto-detect if empty)")
+		pidFlag   = flag.Uint("pid", 0, "Weixin.exe PID override")
 		nMsg      = flag.Int("n", 10, "number of latest messages to print")
 		outDir    = flag.String("out", "m0_work", "working dir for decrypted copies")
 		tryWAL    = flag.Bool("wal", true, "also decrypt -wal files (experimental realtime)")
@@ -55,14 +57,42 @@ func main() {
 		}
 		fmt.Println("[+] provided key verified against page 1")
 	} else {
-		pid, name, err := wechatdb.FindWeChatPID()
-		if err != nil {
-			fatal(err)
+		pid := uint32(*pidFlag)
+		if pid == 0 {
+			var name string
+			pid, name, err = wechatdb.FindWeChatPID()
+			if err != nil {
+				fatal(err)
+			}
+			fmt.Printf("[*] %s PID=%d\n", name, pid)
 		}
-		fmt.Printf("[*] %s PID=%d\n", name, pid)
+
+		var internalKeys [][]byte
+		dll := *dllPath
+		if dll == "" {
+			if exePath, err := wechatdb.GetProcessExePath(pid); err == nil {
+				dll, err = wechatdb.FindWeixinDLL(filepath.Dir(exePath))
+				if err != nil {
+					fmt.Println("    [!]", err)
+				}
+			} else {
+				fmt.Println("    [!] cannot resolve exe path:", err)
+			}
+		}
+		if dll != "" {
+			fmt.Println("[*] Weixin.dll:", dll)
+			t0 := time.Now()
+			internalKeys, err = wechatdb.ExtractInternalKeys(dll)
+			if err != nil {
+				fmt.Println("    [!] dll key scan failed:", err)
+			} else {
+				fmt.Printf("[*] %d internal key candidate(s) from dll in %s\n", len(internalKeys), time.Since(t0).Round(time.Millisecond))
+			}
+		}
+
 		fmt.Println("[*] scanning process memory for db key ...")
 		t0 := time.Now()
-		rawKey, err = wechatdb.RecoverKey(pid, page1, func(s string) { fmt.Println("    " + s) })
+		rawKey, err = wechatdb.RecoverKey(pid, page1, internalKeys, func(s string) { fmt.Println("    " + s) })
 		if err != nil {
 			fatal(err)
 		}
@@ -194,12 +224,13 @@ func main() {
 					if sender == "" {
 						sender = fmt.Sprintf("id:%d", m.SenderID)
 					}
+					content := wechatdb.StripSenderPrefix(m.Content, sender)
 					body := wechatdb.TypeBrief(m.LocalType)
-					if m.Content != "" {
+					if content != "" {
 						if body != "" {
 							body += " "
 						}
-						body += wechatdb.Preview(m.Content, 80)
+						body += wechatdb.Preview(content, 80)
 					}
 					fmt.Printf("    %s  %-24s  %s\n", ts, sender, body)
 				}

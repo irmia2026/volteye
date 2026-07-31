@@ -148,7 +148,18 @@ func isPotentialKey(k []byte) bool {
 	return distinct >= 15 && printable <= 24
 }
 
-func RecoverKey(pid uint32, page1 []byte, logf func(string)) ([]byte, error) {
+func keyVariants(raw []byte, internalKeys [][]byte) [][]byte {
+	out := make([][]byte, 0, 1+len(internalKeys))
+	out = append(out, raw)
+	for _, ik := range internalKeys {
+		if v := XorKeyVariant(raw, ik); v != nil {
+			out = append(out, v)
+		}
+	}
+	return out
+}
+
+func RecoverKey(pid uint32, page1 []byte, internalKeys [][]byte, logf func(string)) ([]byte, error) {
 	h, err := windows.OpenProcess(windows.PROCESS_VM_READ|windows.PROCESS_QUERY_INFORMATION, false, pid)
 	if err != nil {
 		return nil, fmt.Errorf("OpenProcess failed: %v (try running as administrator)", err)
@@ -216,7 +227,6 @@ func RecoverKey(pid uint32, page1 []byte, logf func(string)) ([]byte, error) {
 		found   []byte
 		foundMu sync.Mutex
 		stop    atomic.Bool
-		tested  atomic.Int64
 	)
 	sem := make(chan struct{}, runtime.NumCPU())
 	for _, c := range cands {
@@ -228,18 +238,20 @@ func RecoverKey(pid uint32, page1 []byte, logf func(string)) ([]byte, error) {
 			}
 			sem <- struct{}{}
 			defer func() { <-sem }()
-			if VerifyPage1Key(cand, page1) {
-				foundMu.Lock()
-				found = cand
-				foundMu.Unlock()
-				stop.Store(true)
+			for _, v := range keyVariants(cand, internalKeys) {
+				if VerifyPage1Key(v, page1) {
+					foundMu.Lock()
+					found = v
+					foundMu.Unlock()
+					stop.Store(true)
+					return
+				}
 			}
-			tested.Add(1)
 		}(c)
 	}
 	wg.Wait()
 	if found == nil {
-		return nil, fmt.Errorf("no valid key among %d candidates", len(cands))
+		return nil, fmt.Errorf("no valid key among %d candidates x %d variants", len(cands), 1+len(internalKeys))
 	}
 	return found, nil
 }

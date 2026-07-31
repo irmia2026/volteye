@@ -96,7 +96,7 @@ func ReadLastMessages(db *sql.DB, table string, n int) ([]Message, error) {
 	if !cols["local_id"] || !cols["create_time"] {
 		return nil, fmt.Errorf("table %s missing expected columns", table)
 	}
-	want := []string{"local_id", "server_id", "local_type", "sort_seq", "create_time", "real_sender_id", "message_content"}
+	want := []string{"local_id", "server_id", "local_type", "sort_seq", "create_time", "real_sender_id", "message_content", "compress_content"}
 	var sel []string
 	for _, w := range want {
 		if cols[w] {
@@ -121,6 +121,7 @@ func ReadLastMessages(db *sql.DB, table string, n int) ([]Message, error) {
 			return nil, err
 		}
 		var m Message
+		var msgRaw, compressRaw any
 		for i, col := range sel {
 			switch col {
 			case "local_id":
@@ -136,9 +137,12 @@ func ReadLastMessages(db *sql.DB, table string, n int) ([]Message, error) {
 			case "real_sender_id":
 				m.SenderID = toInt64(vals[i])
 			case "message_content":
-				m.Content = toText(vals[i])
+				msgRaw = vals[i]
+			case "compress_content":
+				compressRaw = vals[i]
 			}
 		}
+		m.Content = DecodeContent(compressRaw, msgRaw)
 		msgs = append(msgs, m)
 	}
 	for i, j := 0, len(msgs)-1; i < j; i, j = i+1, j-1 {
