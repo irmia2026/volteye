@@ -336,6 +336,8 @@ type MessageFilter struct {
 	GroupWxid   string
 	Keyword     string
 	OnlyMatched bool
+	StartTime   int64
+	EndTime     int64
 	Limit       int
 }
 
@@ -434,4 +436,100 @@ func (s *Store) MarkMessageScanned(id int64, ruleIDs string) error {
 	_, err := s.db.Exec(`UPDATE messages SET scanned = 1, matched = ?, matched_rules = ? WHERE id = ?`,
 		matched, ruleIDs, id)
 	return err
+}
+
+func (s *Store) StreamMessages(f MessageFilter, fn func(MessageRow) error) error {
+	q := `SELECT m.id, m.group_wxid, g.name, m.sender_wxid, m.create_time, m.local_type, m.content, m.matched, m.matched_rules
+		FROM messages m LEFT JOIN groups g ON g.wxid = m.group_wxid`
+	var where []string
+	var args []any
+	if f.GroupWxid != "" {
+		where = append(where, `m.group_wxid = ?`)
+		args = append(args, f.GroupWxid)
+	}
+	if f.Keyword != "" {
+		where = append(where, `(m.content LIKE ? OR g.name LIKE ?)`)
+		kw := "%" + f.Keyword + "%"
+		args = append(args, kw, kw)
+	}
+	if f.OnlyMatched {
+		where = append(where, `m.matched = 1`)
+	}
+	if f.StartTime > 0 {
+		where = append(where, `m.create_time >= ?`)
+		args = append(args, f.StartTime)
+	}
+	if f.EndTime > 0 {
+		where = append(where, `m.create_time <= ?`)
+		args = append(args, f.EndTime)
+	}
+	if len(where) > 0 {
+		q += ` WHERE ` + where[0]
+		for _, w := range where[1:] {
+			q += ` AND ` + w
+		}
+	}
+	q += ` ORDER BY m.create_time ASC, m.id ASC`
+	rows, err := s.db.Query(q, args...)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var r MessageRow
+		var name sql.NullString
+		var matched int
+		if err := rows.Scan(&r.ID, &r.GroupWxid, &name, &r.SenderWxid, &r.CreateTime,
+			&r.LocalType, &r.Content, &matched, &r.MatchedRules); err != nil {
+			return err
+		}
+		r.GroupName = name.String
+		r.Matched = matched != 0
+		if err := fn(r); err != nil {
+			return err
+		}
+	}
+	return rows.Err()
+}
+
+func (s *Store) GetSetting(key, def string) string {
+	var v string
+	if err := s.db.QueryRow(`SELECT value FROM settings WHERE key=?`, key).Scan(&v); err != nil {
+		return def
+	}
+	return v
+}
+
+func (s *Store) SetSetting(key, value string) error {
+	_, err := s.db.Exec(
+		`INSERT INTO settings(key, value) VALUES(?, ?)
+		 ON CONFLICT(key) DO UPDATE SET value=excluded.value`, key, value)
+	return err
+}
+
+func (s *Store) DeleteMessagesBefore(ts int64) (int64, error) {
+	res, err := s.db.Exec(`DELETE FROM messages WHERE create_time < ?`, ts)
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
+}
+
+func (s *Store) DeleteOldestBatch(limit int) (int64, error) {
+	res, err := s.db.Exec(`DELETE FROM messages WHERE id IN (SELECT id FROM messages ORDER BY id ASC LIMIT ?)`, limit)
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
+}
+
+func (s *Store) Vacuum() error {
+	_, err := s.db.Exec(`VACUUM`)
+	return err
+}
+
+func (s *Store) OldestMessageTime() (int64, error) {
+	var t sql.NullInt64
+	err := s.db.QueryRow(`SELECT MIN(create_time) FROM messages`).Scan(&t)
+	return t.Int64, err
 }

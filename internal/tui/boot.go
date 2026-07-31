@@ -10,6 +10,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
+	"volteye/internal/cleanup"
 	"volteye/internal/extract"
 	"volteye/internal/store"
 	"volteye/internal/sync"
@@ -152,5 +153,8 @@ func DefaultBoot(cfg AppConfig, send func(tea.Msg)) (*store.Store, *sync.Collect
 		st.Close()
 		return nil, nil, err
 	}
+	cleanup.StartLoop(st, cfg.DataDir, filepath.Join(cfg.DataDir, "volteye.db"), time.Hour, func(s string) {
+		send(logMsg{at: time.Now(), text: s})
+	})
 	return st, col, nil
 }

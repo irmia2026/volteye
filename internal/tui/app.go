@@ -83,7 +83,7 @@ func (m *rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			newGroupsPanel(m.st),
 			newMessagesPanel(m.st, m.cfg.Engine),
 			newRulesPanel(m.st, m.cfg.Engine),
-			newStubPanel("导出", "M4 里程碑：xlsx 导出与归档"),
+			newExportPanel(m.st, m.cfg.DataDir),
 			newStubPanel("设置", "M5 里程碑：轮询间隔 / 保留策略 / 自启"),
 			newLogsPanel(),
 		}
