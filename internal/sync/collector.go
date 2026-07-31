@@ -5,11 +5,17 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"time"
 
 	"volteye/internal/store"
 	"volteye/internal/wechatdb"
 )
+
+type Matcher interface {
+	Match(content string) []int64
+}
 
 type Config struct {
 	DBStorage  string
@@ -18,6 +24,7 @@ type Config struct {
 	WorkDir    string
 	Logf       func(string)
 	OnPollDone func(inserted int)
+	Matcher    Matcher
 }
 
 type fileSig struct {
@@ -236,12 +243,42 @@ func (c *Collector) syncGroup(g store.Group) (int, error) {
 	return inserted, nil
 }
 
+func (c *Collector) applyMatching() {
+	if c.cfg.Matcher == nil {
+		return
+	}
+	for {
+		rows, err := c.st.UnscannedMessages(500)
+		if err != nil {
+			c.log("match scan failed: %v", err)
+			return
+		}
+		if len(rows) == 0 {
+			return
+		}
+		for _, m := range rows {
+			hits := c.cfg.Matcher.Match(m.Content)
+			var ids []string
+			for _, id := range hits {
+				ids = append(ids, strconv.FormatInt(id, 10))
+			}
+			if err := c.st.MarkMessageScanned(m.ID, strings.Join(ids, ",")); err != nil {
+				c.log("mark message %d failed: %v", m.ID, err)
+			}
+		}
+		if len(rows) < 500 {
+			return
+		}
+	}
+}
+
 func (c *Collector) poll() {
 	n, err := c.PollOnce()
 	if err != nil {
 		c.log("poll error: %v", err)
 		return
 	}
+	c.applyMatching()
 	if c.cfg.OnPollDone != nil {
 		c.cfg.OnPollDone(n)
 	}

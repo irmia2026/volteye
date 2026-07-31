@@ -9,6 +9,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
+	"volteye/internal/extract"
 	"volteye/internal/store"
 	"volteye/internal/sync"
 )
@@ -18,6 +19,7 @@ type AppConfig struct {
 	DataDir   string
 	Interval  time.Duration
 	KeyHex    string
+	Engine    *extract.Engine
 	Boot      func(cfg AppConfig, send func(tea.Msg)) (*store.Store, *sync.Collector, error)
 }
 
@@ -36,6 +38,9 @@ type rootModel struct {
 }
 
 func NewRoot(cfg AppConfig) *rootModel {
+	if cfg.Engine == nil {
+		cfg.Engine = extract.NewEngine()
+	}
 	return &rootModel{cfg: cfg, booting: true}
 }
 
@@ -76,7 +81,8 @@ func (m *rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.panels = []Panel{
 			newOverviewPanel(m.st),
 			newGroupsPanel(m.st),
-			newStubPanel("消息流", "M3 里程碑：消息滚动 + 规则高亮"),
+			newMessagesPanel(m.st, m.cfg.Engine),
+			newRulesPanel(m.st, m.cfg.Engine),
 			newStubPanel("导出", "M4 里程碑：xlsx 导出与归档"),
 			newStubPanel("设置", "M5 里程碑：轮询间隔 / 保留策略 / 自启"),
 			newLogsPanel(),

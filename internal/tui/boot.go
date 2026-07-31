@@ -5,10 +5,12 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 
+	"volteye/internal/extract"
 	"volteye/internal/store"
 	"volteye/internal/sync"
 	"volteye/internal/wechatdb"
@@ -77,6 +79,23 @@ func DefaultBoot(cfg AppConfig, send func(tea.Msg)) (*store.Store, *sync.Collect
 	if err != nil {
 		return nil, nil, err
 	}
+	if rules, err := st.ListRules(); err == nil {
+		var erules []extract.Rule
+		for _, r := range rules {
+			var kws []string
+			for _, kw := range strings.Split(r.Keywords, ",") {
+				if kw = strings.TrimSpace(kw); kw != "" {
+					kws = append(kws, kw)
+				}
+			}
+			erules = append(erules, extract.Rule{ID: r.ID, Name: r.Name, Keywords: kws, Regex: r.Regex, Enabled: r.Enabled})
+		}
+		if err := cfg.Engine.Load(erules); err != nil {
+			step("规则编译警告: " + err.Error())
+		} else if len(erules) > 0 {
+			step(fmt.Sprintf("已加载 %d 条识别规则", len(erules)))
+		}
+	}
 
 	var roomOrder []string
 	names := map[string]string{}
@@ -127,6 +146,7 @@ func DefaultBoot(cfg AppConfig, send func(tea.Msg)) (*store.Store, *sync.Collect
 		OnPollDone: func(n int) {
 			send(pollTickMsg{at: time.Now(), inserted: n})
 		},
+		Matcher: cfg.Engine,
 	}, st)
 	if err := col.Init(); err != nil {
 		st.Close()
