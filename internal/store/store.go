@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	_ "modernc.org/sqlite"
 )
@@ -27,6 +28,7 @@ type Group struct {
 
 type Message struct {
 	GroupWxid  string
+	SrcDB      string
 	LocalID    int64
 	ServerID   int64
 	LocalType  int64
@@ -61,7 +63,16 @@ CREATE TABLE IF NOT EXISTS messages(
 matched INTEGER NOT NULL DEFAULT 0,
 	matched_rules TEXT NOT NULL DEFAULT '',
 	scanned INTEGER NOT NULL DEFAULT 0,
-	UNIQUE(group_wxid, local_id)
+	src_db TEXT NOT NULL DEFAULT '',
+	UNIQUE(group_wxid, src_db, local_id)
+);
+CREATE TABLE IF NOT EXISTS sync_cursors(
+	group_wxid TEXT NOT NULL,
+	src_db TEXT NOT NULL,
+	create_time INTEGER NOT NULL DEFAULT 0,
+	sort_seq INTEGER NOT NULL DEFAULT 0,
+	local_id INTEGER NOT NULL DEFAULT 0,
+	PRIMARY KEY(group_wxid, src_db)
 );
 CREATE INDEX IF NOT EXISTS idx_messages_group_time ON messages(group_wxid, create_time);
 CREATE TABLE IF NOT EXISTS rules(
@@ -93,7 +104,62 @@ func Open(path string) (*Store, error) {
 		db.Close()
 		return nil, fmt.Errorf("migrate: %w", err)
 	}
+	if err := migrateMessagesUnique(db); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("migrate messages: %w", err)
+	}
 	return &Store{db: db}, nil
+}
+
+func migrateMessagesUnique(db *sql.DB) error {
+	var tblSQL string
+	err := db.QueryRow("SELECT sql FROM sqlite_master WHERE type='table' AND name='messages'").Scan(&tblSQL)
+	if err != nil {
+		return nil
+	}
+	if strings.Contains(tblSQL, "UNIQUE(group_wxid, src_db, local_id)") {
+		return nil
+	}
+	_, err = db.Exec("ALTER TABLE messages RENAME TO messages_old")
+	if err != nil {
+		return err
+	}
+	_, err = db.Exec(`CREATE TABLE messages(
+	id INTEGER PRIMARY KEY AUTOINCREMENT,
+	group_wxid TEXT NOT NULL,
+	src_db TEXT NOT NULL DEFAULT '',
+	local_id INTEGER NOT NULL,
+	server_id INTEGER NOT NULL DEFAULT 0,
+	local_type INTEGER NOT NULL DEFAULT 0,
+	sort_seq INTEGER NOT NULL DEFAULT 0,
+	create_time INTEGER NOT NULL,
+	sender_wxid TEXT NOT NULL DEFAULT '',
+	content TEXT NOT NULL DEFAULT '',
+	matched INTEGER NOT NULL DEFAULT 0,
+	matched_rules TEXT NOT NULL DEFAULT '',
+	scanned INTEGER NOT NULL DEFAULT 0,
+	UNIQUE(group_wxid, src_db, local_id)
+)`)
+	if err != nil {
+		return err
+	}
+	_, err = db.Exec(`INSERT OR IGNORE INTO messages
+		(id, group_wxid, src_db, local_id, server_id, local_type, sort_seq, create_time, sender_wxid, content, matched, matched_rules, scanned)
+		SELECT id, group_wxid, '', local_id, server_id, local_type, sort_seq, create_time, sender_wxid, content, matched, matched_rules, scanned
+		FROM messages_old`)
+	if err != nil {
+		return err
+	}
+	_, err = db.Exec("DROP TABLE messages_old")
+	if err != nil {
+		return err
+	}
+	_, err = db.Exec("CREATE INDEX IF NOT EXISTS idx_messages_group_time ON messages(group_wxid, create_time)")
+	if err != nil {
+		return err
+	}
+	_, err = db.Exec("UPDATE groups SET backfill_done=0")
+	return err
 }
 
 func migrateColumns(db *sql.DB) error {
@@ -105,6 +171,7 @@ func migrateColumns(db *sql.DB) error {
 		{"messages", "matched_rules", `ALTER TABLE messages ADD COLUMN matched_rules TEXT NOT NULL DEFAULT ''`},
 		{"messages", "scanned", `ALTER TABLE messages ADD COLUMN scanned INTEGER NOT NULL DEFAULT 0`},
 		{"groups", "alias", `ALTER TABLE groups ADD COLUMN alias TEXT NOT NULL DEFAULT ''`},
+		{"messages", "src_db", `ALTER TABLE messages ADD COLUMN src_db TEXT NOT NULL DEFAULT ''`},
 	}
 	for _, m := range migrate {
 		exists := false
@@ -235,8 +302,8 @@ func (s *Store) InsertMessages(msgs []Message) (int, error) {
 	}
 	stmt, err := tx.Prepare(
 		`INSERT OR IGNORE INTO messages
-		 (group_wxid, local_id, server_id, local_type, sort_seq, create_time, sender_wxid, content)
-		 VALUES(?, ?, ?, ?, ?, ?, ?, ?)`)
+		 (group_wxid, src_db, local_id, server_id, local_type, sort_seq, create_time, sender_wxid, content)
+		 VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)`)
 	if err != nil {
 		tx.Rollback()
 		return 0, err
@@ -244,7 +311,7 @@ func (s *Store) InsertMessages(msgs []Message) (int, error) {
 	defer stmt.Close()
 	inserted := 0
 	for _, m := range msgs {
-		res, err := stmt.Exec(m.GroupWxid, m.LocalID, m.ServerID, m.LocalType,
+		res, err := stmt.Exec(m.GroupWxid, m.SrcDB, m.LocalID, m.ServerID, m.LocalType,
 			m.SortSeq, m.CreateTime, m.SenderWxid, m.Content)
 		if err != nil {
 			tx.Rollback()
@@ -578,5 +645,34 @@ func (s *Store) MatchedCount() (int64, error) {
 
 func (s *Store) SetGroupAlias(wxid, alias string) error {
 	_, err := s.db.Exec(`UPDATE groups SET alias=? WHERE wxid=?`, alias, wxid)
+	return err
+}
+
+type ShardCursor struct {
+	CreateTime int64
+	SortSeq    int64
+	LocalID    int64
+}
+
+func (s *Store) GetShardCursor(groupWxid, srcDB string) (ShardCursor, error) {
+	var c ShardCursor
+	err := s.db.QueryRow("SELECT create_time, sort_seq, local_id FROM sync_cursors WHERE group_wxid=? AND src_db=?",
+		groupWxid, srcDB).Scan(&c.CreateTime, &c.SortSeq, &c.LocalID)
+	if err == sql.ErrNoRows {
+		return ShardCursor{}, nil
+	}
+	return c, err
+}
+
+func (s *Store) SaveShardCursor(groupWxid, srcDB string, c ShardCursor) error {
+	_, err := s.db.Exec(
+		"INSERT INTO sync_cursors(group_wxid, src_db, create_time, sort_seq, local_id) VALUES(?,?,?,?,?)"+
+			" ON CONFLICT(group_wxid, src_db) DO UPDATE SET create_time=excluded.create_time, sort_seq=excluded.sort_seq, local_id=excluded.local_id",
+		groupWxid, srcDB, c.CreateTime, c.SortSeq, c.LocalID)
+	return err
+}
+
+func (s *Store) ResetAllCursors() error {
+	_, err := s.db.Exec("DELETE FROM sync_cursors")
 	return err
 }

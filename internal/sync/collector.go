@@ -39,19 +39,19 @@ type Collector struct {
 	st       *store.Store
 	srcDBs   []string
 	sigs     map[string]fileSig
-	tableDB  map[string]string
+	tableDBs map[string][]string
 	encDir   string
 	decDir   string
 }
 
 func New(cfg Config, st *store.Store) *Collector {
 	c := &Collector{
-		cfg:     cfg,
-		st:      st,
-		sigs:    map[string]fileSig{},
-		tableDB: map[string]string{},
-		encDir:  filepath.Join(cfg.WorkDir, "enc"),
-		decDir:  filepath.Join(cfg.WorkDir, "dec"),
+		cfg:      cfg,
+		st:       st,
+		sigs:     map[string]fileSig{},
+		tableDBs: map[string][]string{},
+		encDir:   filepath.Join(cfg.WorkDir, "enc"),
+		decDir:   filepath.Join(cfg.WorkDir, "dec"),
 	}
 	c.SetInterval(cfg.Interval)
 	return c
@@ -156,8 +156,15 @@ func (c *Collector) discover() {
 			continue
 		}
 		for _, n := range names {
-			if _, exists := c.tableDB[n]; !exists {
-				c.tableDB[n] = decPath
+			found := false
+			for _, existing := range c.tableDBs[n] {
+				if existing == decPath {
+					found = true
+					break
+				}
+			}
+			if !found {
+				c.tableDBs[n] = append(c.tableDBs[n], decPath)
 			}
 		}
 	}
@@ -185,28 +192,53 @@ func (c *Collector) PollOnce() (int, error) {
 
 func (c *Collector) syncGroup(g store.Group) (int, error) {
 	table := wechatdb.MsgTableName(g.Wxid)
-	decPath, ok := c.tableDB[table]
+	decPaths, ok := c.tableDBs[table]
 	if !ok {
 		return 0, nil
 	}
+	totalInserted := 0
+	for _, decPath := range decPaths {
+		n, err := c.syncShard(g, table, decPath)
+		if err != nil {
+			return totalInserted, err
+		}
+		totalInserted += n
+	}
+	if totalInserted > 0 {
+		label := g.Name
+		if label == "" {
+			label = g.Wxid
+		}
+		c.log("[%s] +%d message(s)", label, totalInserted)
+	}
+	return totalInserted, nil
+}
+
+func (c *Collector) syncShard(g store.Group, table, decPath string) (int, error) {
+	srcDB := filepath.Base(decPath)
 	db, err := wechatdb.OpenDB(decPath)
 	if err != nil {
 		return 0, err
 	}
 	defer db.Close()
 
-	ct, ss, lid := g.LastCreateTime, g.LastSortSeq, g.LastLocalID
+	cur, err := c.st.GetShardCursor(g.Wxid, srcDB)
+	if err != nil {
+		return 0, err
+	}
+
+	ct, ss, lid := cur.CreateTime, cur.SortSeq, cur.LocalID
 	backfilling := false
 	switch {
 	case g.Backfill && !g.BackfillDone:
 		ct, ss, lid = 0, 0, 0
 		backfilling = true
-	case ct == 0 && !g.BackfillDone:
+	case ct == 0 && ss == 0 && lid == 0 && !g.BackfillDone:
 		maxCT, maxSS, maxLID, err := wechatdb.LatestCursor(db, table)
 		if err != nil {
 			return 0, err
 		}
-		return 0, c.st.SaveProgress(g.Wxid, maxCT, maxSS, maxLID, true)
+		return 0, c.st.SaveShardCursor(g.Wxid, srcDB, store.ShardCursor{CreateTime: maxCT, SortSeq: maxSS, LocalID: maxLID})
 	}
 
 	nameMap := wechatdb.Name2ID(db)
@@ -228,6 +260,7 @@ func (c *Collector) syncGroup(g store.Group) (int, error) {
 			content := wechatdb.StripSenderPrefix(m.Content, sender)
 			batch = append(batch, store.Message{
 				GroupWxid:  g.Wxid,
+				SrcDB:      srcDB,
 				LocalID:    m.LocalID,
 				ServerID:   m.ServerID,
 				LocalType:  m.LocalType,
@@ -247,16 +280,13 @@ func (c *Collector) syncGroup(g store.Group) (int, error) {
 			break
 		}
 	}
-	bfd := g.BackfillDone || backfilling
-	if err := c.st.SaveProgress(g.Wxid, ct, ss, lid, bfd); err != nil {
+	if err := c.st.SaveShardCursor(g.Wxid, srcDB, store.ShardCursor{CreateTime: ct, SortSeq: ss, LocalID: lid}); err != nil {
 		return inserted, err
 	}
-	if inserted > 0 {
-		label := g.Name
-		if label == "" {
-			label = g.Wxid
+	if backfilling {
+		if err := c.st.SaveProgress(g.Wxid, ct, ss, lid, true); err != nil {
+			return inserted, err
 		}
-		c.log("[%s] +%d message(s)", label, inserted)
 	}
 	return inserted, nil
 }
