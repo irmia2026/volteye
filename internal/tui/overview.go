@@ -44,6 +44,7 @@ func (p *overviewPanel) View() string {
 	counts, _ := p.st.GroupMessageCounts()
 	latest, _ := p.st.LatestTimes()
 	monitored, _ := p.st.MonitoredGroups()
+	matched, _ := p.st.MatchedCount()
 
 	status := styleGood.Render("● 采集运行中")
 	pollInfo := "尚未轮询"
@@ -55,7 +56,8 @@ func (p *overviewPanel) View() string {
 		status + "\n" +
 		fmt.Sprintf("最近轮询: %s\n", pollInfo) +
 		fmt.Sprintf("监控群数: %s", styleGood.Render(fmt.Sprintf("%d", len(monitored)))) + "\n" +
-		fmt.Sprintf("落盘总量: %s", styleGood.Render(fmt.Sprintf("%d", total)))
+		fmt.Sprintf("落盘总量: %s\n", styleGood.Render(fmt.Sprintf("%d", total))) +
+		fmt.Sprintf("匹配消息: %s", styleWarn.Render(fmt.Sprintf("%d", matched)))
 
 	type row struct {
 		name  string

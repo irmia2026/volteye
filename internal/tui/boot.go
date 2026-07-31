@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -136,6 +137,9 @@ func DefaultBoot(cfg AppConfig, send func(tea.Msg)) (*store.Store, *sync.Collect
 	if interval <= 0 {
 		interval = 3 * time.Second
 	}
+	if !isElevated() {
+		step("警告：当前非管理员运行，若密钥提取失败请以管理员身份重启")
+	}
 	col := sync.New(sync.Config{
 		DBStorage: ds,
 		Key:       rawKey,
@@ -149,6 +153,9 @@ func DefaultBoot(cfg AppConfig, send func(tea.Msg)) (*store.Store, *sync.Collect
 		},
 		Matcher: cfg.Engine,
 	}, st)
+	if v, err := strconv.Atoi(st.GetSetting("poll_interval_ms", "")); err == nil && v > 0 {
+		col.SetInterval(time.Duration(v) * time.Millisecond)
+	}
 	if err := col.Init(); err != nil {
 		st.Close()
 		return nil, nil, err

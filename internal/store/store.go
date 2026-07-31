@@ -533,3 +533,25 @@ func (s *Store) OldestMessageTime() (int64, error) {
 	err := s.db.QueryRow(`SELECT MIN(create_time) FROM messages`).Scan(&t)
 	return t.Int64, err
 }
+
+func (s *Store) DeleteGroupMessages(wxid string) (int64, error) {
+	res, err := s.db.Exec(`DELETE FROM messages WHERE group_wxid=?`, wxid)
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
+}
+
+func (s *Store) DeleteAllMessages() (int64, error) {
+	res, err := s.db.Exec(`DELETE FROM messages`)
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
+}
+
+func (s *Store) MatchedCount() (int64, error) {
+	var n int64
+	err := s.db.QueryRow(`SELECT COUNT(1) FROM messages WHERE matched=1`).Scan(&n)
+	return n, err
+}

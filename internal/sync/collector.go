@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"volteye/internal/store"
@@ -33,17 +34,18 @@ type fileSig struct {
 }
 
 type Collector struct {
-	cfg     Config
-	st      *store.Store
-	srcDBs  []string
-	sigs    map[string]fileSig
-	tableDB map[string]string
-	encDir  string
-	decDir  string
+	cfg      Config
+	interval atomic.Int64
+	st       *store.Store
+	srcDBs   []string
+	sigs     map[string]fileSig
+	tableDB  map[string]string
+	encDir   string
+	decDir   string
 }
 
 func New(cfg Config, st *store.Store) *Collector {
-	return &Collector{
+	c := &Collector{
 		cfg:     cfg,
 		st:      st,
 		sigs:    map[string]fileSig{},
@@ -51,6 +53,19 @@ func New(cfg Config, st *store.Store) *Collector {
 		encDir:  filepath.Join(cfg.WorkDir, "enc"),
 		decDir:  filepath.Join(cfg.WorkDir, "dec"),
 	}
+	c.SetInterval(cfg.Interval)
+	return c
+}
+
+func (c *Collector) SetInterval(d time.Duration) {
+	if d < time.Second {
+		d = time.Second
+	}
+	c.interval.Store(int64(d))
+}
+
+func (c *Collector) Interval() time.Duration {
+	return time.Duration(c.interval.Load())
 }
 
 func (c *Collector) log(format string, args ...any) {
@@ -286,17 +301,13 @@ func (c *Collector) poll() {
 
 func (c *Collector) Run(ctx context.Context) error {
 	c.poll()
-	interval := c.cfg.Interval
-	if interval <= 0 {
-		interval = 3 * time.Second
-	}
-	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
 	for {
+		timer := time.NewTimer(c.Interval())
 		select {
 		case <-ctx.Done():
+			timer.Stop()
 			return ctx.Err()
-		case <-ticker.C:
+		case <-timer.C:
 			c.poll()
 		}
 	}

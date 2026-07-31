@@ -2,6 +2,8 @@ package tui
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -84,7 +86,7 @@ func (m *rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			newMessagesPanel(m.st, m.cfg.Engine),
 			newRulesPanel(m.st, m.cfg.Engine),
 			newExportPanel(m.st, m.cfg.DataDir),
-			newStubPanel("设置", "M5 里程碑：轮询间隔 / 保留策略 / 自启"),
+			newSettingsPanel(m.st, m.col, m.cfg.DataDir, filepath.Join(m.cfg.DataDir, "volteye.db"), exePath()),
 			newLogsPanel(),
 		}
 		if m.width > 0 {
@@ -185,6 +187,14 @@ func (m *rootModel) View() string {
 
 	content := m.panels[m.active].View()
 	return lipgloss.JoinVertical(lipgloss.Left, tabBar, sep, content, sep, footer)
+}
+
+func exePath() string {
+	p, err := os.Executable()
+	if err != nil {
+		return ""
+	}
+	return p
 }
 
 func max(a, b int) int {
