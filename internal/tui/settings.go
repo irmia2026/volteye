@@ -80,9 +80,9 @@ func (p *settingsPanel) Title() string { return "设置" }
 
 func (p *settingsPanel) Help() string {
 	if p.confirm != "" {
-		return "y:确认  n/Esc:取消"
+		return "y 确认 · n/Esc 取消"
 	}
-	return "↑/↓:选择  ←/→:调整  x:立即清理  c:清空消息(先归档)"
+	return "↑↓ 选择 · ←→ 调整 · x 立即清理 · c 清空(先归档)"
 }
 
 func (p *settingsPanel) CapturesInput() bool { return p.confirm != "" }
@@ -200,11 +200,11 @@ func (p *settingsPanel) adjust(delta int) {
 }
 
 func (p *settingsPanel) row(idx int, label, value string) string {
-	line := fmt.Sprintf("  %s %s", padRunes(label, 12), styleGood.Render("◀ "+value+" ▶"))
+	line := fmt.Sprintf(" %s %s", padRunes(label, 12), stAccent.Render("◀ ")+stInk.Render(value)+stAccent.Render(" ▶"))
 	if idx == p.sel {
-		return styleCursor.Render(line)
+		return stCursorRow.Render("▸") + line
 	}
-	return line
+	return " " + line
 }
 
 func (p *settingsPanel) View() string {

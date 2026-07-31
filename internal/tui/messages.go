@@ -8,7 +8,6 @@ import (
 	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
 
 	"volteye/internal/store"
 	"volteye/internal/wechatdb"
@@ -45,9 +44,9 @@ func (p *messagesPanel) Title() string { return "消息流" }
 
 func (p *messagesPanel) Help() string {
 	if p.filtering {
-		return "回车:应用过滤  Esc:取消"
+		return "回车 应用 · Esc 取消"
 	}
-	return "↑/↓/pgup/pgdn:滚动  f:跟随最新  m:只看匹配  /:过滤  c:清过滤"
+	return "↑↓ 滚动 · f 跟随 · m 只看匹配 · / 过滤 · c 清过滤"
 }
 
 func (p *messagesPanel) CapturesInput() bool { return p.filtering }
@@ -56,7 +55,7 @@ func (p *messagesPanel) Init() tea.Cmd       { return p.reload }
 func (p *messagesPanel) SetSize(w, h int) {
 	p.w, p.h = w, h
 	p.vp.Width = w - 2
-	p.vp.Height = h - 3
+	p.vp.Height = h - 4
 	p.filter.Width = w - 10
 	p.renderRows()
 }
@@ -76,7 +75,7 @@ func (p *messagesPanel) reload() tea.Msg {
 func (p *messagesPanel) renderRows() {
 	var sb strings.Builder
 	if len(p.rows) == 0 {
-		sb.WriteString(styleMuted.Render("  暂无消息") + "\n")
+		sb.WriteString("  " + stMuted.Render("暂无消息") + "\n")
 	}
 	for _, r := range p.rows {
 		sb.WriteString(p.renderRow(r) + "\n")
@@ -91,8 +90,6 @@ func (p *messagesPanel) renderRows() {
 	}
 }
 
-var styleMatched = lipgloss.NewStyle().Foreground(colorWarn).Bold(true)
-
 func (p *messagesPanel) renderRow(r store.MessageRow) string {
 	ts := time.Unix(r.CreateTime, 0).Format("01-02 15:04")
 	group := r.GroupName
@@ -101,27 +98,29 @@ func (p *messagesPanel) renderRow(r store.MessageRow) string {
 	}
 	sender := r.SenderWxid
 	if sender == "" {
-		sender = "-"
+		sender = "—"
 	}
 	brief := wechatdb.TypeBrief(r.LocalType)
-	content := wechatdb.Preview(r.Content, 80)
+	content := wechatdb.Preview(r.Content, 70)
 	body := content
 	if brief != "" {
-		body = brief + " " + content
+		body = stFaint.Render(brief) + " " + content
 	}
-	meta := styleMuted.Render(ts) + " " + padRunes(group, 14) + " " + padRunes(sender, 16)
+	sep := stFaint.Render(" │ ")
+	line := stFaint.Render(ts) + sep +
+		stAccent.Render(padRunes(group, 12)) + sep +
+		stMuted.Render(padRunes(sender, 12)) + sep + body
 	if r.Matched {
 		tags := ""
 		if p.engine != nil && r.MatchedRules != "" {
-			ids := parseIDs(r.MatchedRules)
-			names := p.engine.RuleNames(ids)
+			names := p.engine.RuleNames(parseIDs(r.MatchedRules))
 			if len(names) > 0 {
-				tags = " ⚑" + strings.Join(names, ",")
+				tags = " " + stWarn.Render("⚑"+strings.Join(names, ","))
 			}
 		}
-		return styleMatched.Render("●") + " " + meta + " " + styleMatched.Render(body+tags)
+		return stWarn.Render("▸ ") + line + tags
 	}
-	return "  " + meta + " " + body
+	return "  " + line
 }
 
 func parseIDs(s string) []int64 {
@@ -195,24 +194,24 @@ func (p *messagesPanel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (p *messagesPanel) View() string {
-	title := styleTitle.Render("消息流")
 	var flags []string
 	if p.onlyMatched {
-		flags = append(flags, styleWarn.Render("只看匹配"))
+		flags = append(flags, stWarn.Render("只看匹配"))
 	}
 	if p.filterText != "" {
-		flags = append(flags, "过滤:"+p.filterText)
+		flags = append(flags, stMuted.Render("过滤:"+p.filterText))
 	}
 	if p.follow {
-		flags = append(flags, "跟随")
+		flags = append(flags, stFaint.Render("跟随"))
 	}
+	head := ""
 	if len(flags) > 0 {
-		title += "  " + styleMuted.Render("["+strings.Join(flags, " ")+"]")
+		head = "  " + strings.Join(flags, " · ") + "\n"
 	}
-	title += styleMuted.Render(fmt.Sprintf("  %d 条", len(p.rows)))
+	head += stFaint.Render(fmt.Sprintf("  最近 %d 条", len(p.rows))) + "\n"
 	body := p.vp.View()
 	if p.filtering {
-		body += "\n" + p.filter.View()
+		body += "\n  " + p.filter.View()
 	}
-	return title + "\n" + body
+	return head + body
 }

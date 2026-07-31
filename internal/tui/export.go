@@ -14,6 +14,8 @@ import (
 	"volteye/internal/store"
 )
 
+type exportGroupsMsg struct{ groups []store.Group }
+
 type exportDoneMsg struct {
 	count int
 	path  string
@@ -53,7 +55,7 @@ func (p *exportPanel) Help() string {
 	if p.running {
 		return "导出中 ..."
 	}
-	return "↑/↓:选择项  ←/→:调整  x:执行导出  r:刷新历史"
+	return "↑↓ 选择 · ←→ 调整 · x 执行导出 · r 刷新"
 }
 func (p *exportPanel) CapturesInput() bool { return false }
 func (p *exportPanel) SetSize(w, h int)    { p.w, p.h = w, h }
@@ -61,7 +63,7 @@ func (p *exportPanel) SetSize(w, h int)    { p.w, p.h = w, h }
 func (p *exportPanel) Init() tea.Cmd {
 	return func() tea.Msg {
 		groups, _ := p.st.MonitoredGroups()
-		return groupsLoadedMsg{groups: groups, counts: nil}
+		return exportGroupsMsg{groups: groups}
 	}
 }
 
@@ -106,7 +108,7 @@ func (p *exportPanel) runExport() tea.Cmd {
 
 func (p *exportPanel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
-	case groupsLoadedMsg:
+	case exportGroupsMsg:
 		p.groups = msg.groups
 		p.loadFiles()
 		return p, nil
@@ -167,11 +169,11 @@ func wrap(v, n int) int {
 }
 
 func (p *exportPanel) optionLine(idx int, label, value string) string {
-	line := fmt.Sprintf("  %s %s", padRunes(label, 8), styleGood.Render("◀ "+value+" ▶"))
+	line := fmt.Sprintf(" %s %s", padRunes(label, 8), stAccent.Render("◀ ")+stInk.Render(value)+stAccent.Render(" ▶"))
 	if idx == p.sel {
-		return styleCursor.Render(line)
+		return stCursorRow.Render("▸") + line
 	}
-	return line
+	return " " + line
 }
 
 func (p *exportPanel) View() string {

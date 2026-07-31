@@ -16,6 +16,7 @@ type Store struct {
 type Group struct {
 	Wxid           string
 	Name           string
+	Alias          string
 	Monitored      bool
 	Backfill       bool
 	BackfillDone   bool
@@ -39,6 +40,7 @@ const schema = `
 CREATE TABLE IF NOT EXISTS groups(
 	wxid TEXT PRIMARY KEY,
 	name TEXT NOT NULL DEFAULT '',
+	alias TEXT NOT NULL DEFAULT '',
 	monitored INTEGER NOT NULL DEFAULT 0,
 	backfill INTEGER NOT NULL DEFAULT 0,
 	backfill_done INTEGER NOT NULL DEFAULT 0,
@@ -95,29 +97,37 @@ func Open(path string) (*Store, error) {
 }
 
 func migrateColumns(db *sql.DB) error {
-	want := map[string]string{
-		"matched_rules": `ALTER TABLE messages ADD COLUMN matched_rules TEXT NOT NULL DEFAULT ''`,
-		"scanned":       `ALTER TABLE messages ADD COLUMN scanned INTEGER NOT NULL DEFAULT 0`,
+	migrate := []struct {
+		table string
+		col   string
+		ddl   string
+	}{
+		{"messages", "matched_rules", `ALTER TABLE messages ADD COLUMN matched_rules TEXT NOT NULL DEFAULT ''`},
+		{"messages", "scanned", `ALTER TABLE messages ADD COLUMN scanned INTEGER NOT NULL DEFAULT 0`},
+		{"groups", "alias", `ALTER TABLE groups ADD COLUMN alias TEXT NOT NULL DEFAULT ''`},
 	}
-	rows, err := db.Query(`PRAGMA table_info(messages)`)
-	if err != nil {
-		return err
-	}
-	defer rows.Close()
-	existing := map[string]bool{}
-	for rows.Next() {
-		var cid int
-		var name, ctype string
-		var notnull, pk int
-		var dflt sql.NullString
-		if err := rows.Scan(&cid, &name, &ctype, &notnull, &dflt, &pk); err != nil {
+	for _, m := range migrate {
+		exists := false
+		rows, err := db.Query(`PRAGMA table_info(` + m.table + `)`)
+		if err != nil {
 			return err
 		}
-		existing[name] = true
-	}
-	for col, ddl := range want {
-		if !existing[col] {
-			if _, err := db.Exec(ddl); err != nil {
+		for rows.Next() {
+			var cid int
+			var name, ctype string
+			var notnull, pk int
+			var dflt sql.NullString
+			if err := rows.Scan(&cid, &name, &ctype, &notnull, &dflt, &pk); err != nil {
+				rows.Close()
+				return err
+			}
+			if name == m.col {
+				exists = true
+			}
+		}
+		rows.Close()
+		if !exists {
+			if _, err := db.Exec(m.ddl); err != nil {
 				return err
 			}
 		}
@@ -138,7 +148,7 @@ func (s *Store) UpsertGroup(wxid, name string) error {
 
 func (s *Store) ListGroups() ([]Group, error) {
 	rows, err := s.db.Query(
-		`SELECT wxid, name, monitored, backfill, backfill_done, last_create_time, last_sort_seq, last_local_id
+		`SELECT wxid, name, alias, monitored, backfill, backfill_done, last_create_time, last_sort_seq, last_local_id
 		 FROM groups ORDER BY monitored DESC, name`)
 	if err != nil {
 		return nil, err
@@ -149,7 +159,7 @@ func (s *Store) ListGroups() ([]Group, error) {
 
 func (s *Store) MonitoredGroups() ([]Group, error) {
 	rows, err := s.db.Query(
-		`SELECT wxid, name, monitored, backfill, backfill_done, last_create_time, last_sort_seq, last_local_id
+		`SELECT wxid, name, alias, monitored, backfill, backfill_done, last_create_time, last_sort_seq, last_local_id
 		 FROM groups WHERE monitored = 1`)
 	if err != nil {
 		return nil, err
@@ -158,12 +168,22 @@ func (s *Store) MonitoredGroups() ([]Group, error) {
 	return scanGroups(rows)
 }
 
+func (g Group) DisplayName() string {
+	if g.Alias != "" {
+		return g.Alias
+	}
+	if g.Name != "" {
+		return g.Name
+	}
+	return g.Wxid
+}
+
 func scanGroups(rows *sql.Rows) ([]Group, error) {
 	var out []Group
 	for rows.Next() {
 		var g Group
 		var mon, bf, bfd int
-		if err := rows.Scan(&g.Wxid, &g.Name, &mon, &bf, &bfd,
+		if err := rows.Scan(&g.Wxid, &g.Name, &g.Alias, &mon, &bf, &bfd,
 			&g.LastCreateTime, &g.LastSortSeq, &g.LastLocalID); err != nil {
 			return nil, err
 		}
@@ -354,7 +374,7 @@ type MessageRow struct {
 }
 
 func (s *Store) QueryMessages(f MessageFilter) ([]MessageRow, error) {
-	q := `SELECT m.id, m.group_wxid, g.name, m.sender_wxid, m.create_time, m.local_type, m.content, m.matched, m.matched_rules
+	q := `SELECT m.id, m.group_wxid, COALESCE(NULLIF(g.alias,''), NULLIF(g.name,''), ''), m.sender_wxid, m.create_time, m.local_type, m.content, m.matched, m.matched_rules
 		FROM messages m LEFT JOIN groups g ON g.wxid = m.group_wxid`
 	var where []string
 	var args []any
@@ -439,7 +459,7 @@ func (s *Store) MarkMessageScanned(id int64, ruleIDs string) error {
 }
 
 func (s *Store) StreamMessages(f MessageFilter, fn func(MessageRow) error) error {
-	q := `SELECT m.id, m.group_wxid, g.name, m.sender_wxid, m.create_time, m.local_type, m.content, m.matched, m.matched_rules
+	q := `SELECT m.id, m.group_wxid, COALESCE(NULLIF(g.alias,''), NULLIF(g.name,''), ''), m.sender_wxid, m.create_time, m.local_type, m.content, m.matched, m.matched_rules
 		FROM messages m LEFT JOIN groups g ON g.wxid = m.group_wxid`
 	var where []string
 	var args []any
@@ -554,4 +574,9 @@ func (s *Store) MatchedCount() (int64, error) {
 	var n int64
 	err := s.db.QueryRow(`SELECT COUNT(1) FROM messages WHERE matched=1`).Scan(&n)
 	return n, err
+}
+
+func (s *Store) SetGroupAlias(wxid, alias string) error {
+	_, err := s.db.Exec(`UPDATE groups SET alias=? WHERE wxid=?`, alias, wxid)
+	return err
 }

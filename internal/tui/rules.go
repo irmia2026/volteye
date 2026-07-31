@@ -42,12 +42,12 @@ func (p *rulesPanel) Title() string { return "规则" }
 
 func (p *rulesPanel) Help() string {
 	if p.form != nil {
-		return "回车:下一步/保存  Esc:取消"
+		return "回车 下一步/保存 · Esc 取消"
 	}
 	if p.confirmID != 0 {
-		return "y:确认删除  n/Esc:取消"
+		return "y 确认删除 · n/Esc 取消"
 	}
-	return "↑/↓:移动  空格:启用/停用  n:新建  d:删除  r:刷新"
+	return "↑↓ 移动 · 空格 启停 · n 新建 · d 删除 · r 刷新"
 }
 
 func (p *rulesPanel) CapturesInput() bool { return p.form != nil || p.confirmID != 0 }
@@ -221,12 +221,12 @@ func (p *rulesPanel) updateForm(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 func (p *rulesPanel) View() string {
 	var sb strings.Builder
-	sb.WriteString(styleTitle.Render("识别规则") + "\n")
-	header := fmt.Sprintf("  %s %s %s %s",
+	header := fmt.Sprintf("   %s %s %s %s",
 		padRunes("启用", 4), padRunes("名称", 16), padRunes("关键词", 36), "正则")
-	sb.WriteString(styleHeader.Render(header) + "\n")
+	sb.WriteString("  " + stTableHead.Render(header) + "\n")
+	sb.WriteString("  " + rule(min(p.w-4, 80)) + "\n")
 	if len(p.rules) == 0 {
-		sb.WriteString(styleMuted.Render("  暂无规则，按 n 新建") + "\n")
+		sb.WriteString("  " + stMuted.Render("暂无规则，按 n 新建") + "\n")
 	}
 	pageSize := max(1, p.h-8)
 	if p.cursor < p.offset {
@@ -238,22 +238,24 @@ func (p *rulesPanel) View() string {
 	end := min(len(p.rules), p.offset+pageSize)
 	for i := p.offset; i < end; i++ {
 		r := p.rules[i]
-		en := " "
+		en := stFaint.Render("○")
 		if r.Enabled {
-			en = styleGood.Render("✓")
+			en = stOk.Render("●")
 		}
-		line := fmt.Sprintf("  %s   %s %s %s",
+		line := fmt.Sprintf(" %s   %s %s %s",
 			en, padRunes(r.Name, 16), padRunes(r.Keywords, 36), r.Regex)
 		if p.confirmID == r.ID {
-			line += styleBad.Render("  [确认删除? y/n]")
+			line += stBad.Render("  [确认删除? y/n]")
 		}
 		if i == p.cursor {
-			line = styleCursor.Render(line)
+			line = stCursorRow.Render("▸") + line
+		} else {
+			line = " " + line
 		}
 		sb.WriteString(line + "\n")
 	}
 	if p.form != nil {
-		sb.WriteString("\n" + styleTitle.Render("新建规则") + "\n")
+		sb.WriteString("\n  " + stPanelTitle.Render("新建规则") + "\n")
 		sb.WriteString("  名称:   " + p.form.name.View() + "\n")
 		sb.WriteString("  关键词: " + p.form.kws.View() + "\n")
 		sb.WriteString("  正则:   " + p.form.re.View() + "\n")

@@ -25,41 +25,54 @@ type AppConfig struct {
 	Boot      func(cfg AppConfig, send func(tea.Msg)) (*store.Store, *sync.Collector, error)
 }
 
+type clockTickMsg time.Time
+
 type rootModel struct {
-	cfg     AppConfig
-	send    func(tea.Msg)
-	panels  []Panel
-	active  int
-	width   int
-	height  int
-	booting bool
-	bootLog []string
-	bootErr string
-	st      *store.Store
-	col     *sync.Collector
+	cfg      AppConfig
+	send     func(tea.Msg)
+	panels   []Panel
+	active   int
+	width    int
+	height   int
+	booting  bool
+	bootLog  []string
+	bootErr  string
+	st       *store.Store
+	col      *sync.Collector
+	lastPoll time.Time
+	clock    time.Time
 }
 
 func NewRoot(cfg AppConfig) *rootModel {
 	if cfg.Engine == nil {
 		cfg.Engine = extract.NewEngine()
 	}
-	return &rootModel{cfg: cfg, booting: true}
+	return &rootModel{cfg: cfg, booting: true, clock: time.Now()}
 }
 
 func (m *rootModel) SetSender(f func(tea.Msg)) { m.send = f }
 
 func (m *rootModel) Init() tea.Cmd {
-	return func() tea.Msg {
-		for m.send == nil {
-			time.Sleep(10 * time.Millisecond)
-		}
-		boot := m.cfg.Boot
-		if boot == nil {
-			boot = DefaultBoot
-		}
-		st, col, err := boot(m.cfg, m.send)
-		return bootDoneMsg{st: st, col: col, err: err}
-	}
+	return tea.Batch(
+		func() tea.Msg {
+			for m.send == nil {
+				time.Sleep(10 * time.Millisecond)
+			}
+			boot := m.cfg.Boot
+			if boot == nil {
+				boot = DefaultBoot
+			}
+			st, col, err := boot(m.cfg, m.send)
+			return bootDoneMsg{st: st, col: col, err: err}
+		},
+		clockCmd(),
+	)
+}
+
+func clockCmd() tea.Cmd {
+	return tea.Tick(time.Second, func(t time.Time) tea.Msg {
+		return clockTickMsg(t)
+	})
 }
 
 func (m *rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -67,9 +80,12 @@ func (m *rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
 		for _, p := range m.panels {
-			p.SetSize(msg.Width, msg.Height-4)
+			p.SetSize(m.contentWidth(), m.contentHeight())
 		}
 		return m, nil
+	case clockTickMsg:
+		m.clock = time.Time(msg)
+		return m, clockCmd()
 	case bootStepMsg:
 		m.bootLog = append(m.bootLog, msg.text)
 		return m, nil
@@ -91,7 +107,7 @@ func (m *rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if m.width > 0 {
 			for _, p := range m.panels {
-				p.SetSize(m.width, m.height-4)
+				p.SetSize(m.contentWidth(), m.contentHeight())
 			}
 		}
 		cmds := []tea.Cmd{startCollectorCmd(m.col)}
@@ -99,6 +115,8 @@ func (m *rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			cmds = append(cmds, p.Init())
 		}
 		return m, tea.Batch(cmds...)
+	case pollTickMsg:
+		m.lastPoll = msg.at
 	case tea.KeyMsg:
 		if m.booting || m.bootErr != "" {
 			if msg.String() == "ctrl+c" || msg.String() == "q" {
@@ -154,39 +172,86 @@ func startCollectorCmd(col *sync.Collector) tea.Cmd {
 	}
 }
 
+const sidebarWidth = 14
+
+func (m *rootModel) contentWidth() int {
+	if w := m.width - sidebarWidth - 2; w > 20 {
+		return w
+	}
+	return 20
+}
+
+func (m *rootModel) contentHeight() int {
+	if h := m.height - 5; h > 5 {
+		return h
+	}
+	return 5
+}
+
+func rule(width int) string {
+	if width < 1 {
+		width = 1
+	}
+	return stRule.Render(strings.Repeat("─", width))
+}
+
 func (m *rootModel) View() string {
 	if m.booting {
 		var b strings.Builder
-		b.WriteString(styleTitle.Render("VoltEye 启动中 ...") + "\n\n")
+		b.WriteString("\n  " + stBrand.Render("VOLTEYE") + "\n\n")
+		b.WriteString("  " + stPanelTitle.Render("初始化") + "\n")
+		b.WriteString("  " + rule(min(60, m.width-4)) + "\n")
 		for _, line := range m.bootLog {
-			b.WriteString("  " + line + "\n")
+			b.WriteString("  " + stMuted.Render(line) + "\n")
 		}
-		b.WriteString("\n" + styleFooter.Render("ctrl+c 退出"))
+		b.WriteString("\n  " + stFaint.Render("ctrl+c 退出"))
 		return b.String()
 	}
 	if m.bootErr != "" {
-		return styleBad.Render("启动失败") + "\n\n  " + m.bootErr + "\n\n" +
-			styleWarn.Render("提示：请确认微信 4.x 已登录，并右键\"以管理员身份运行\"本程序。") + "\n\n" +
-			styleFooter.Render("q 退出")
+		return "\n  " + stBad.Render("启动失败") + "\n\n  " + m.bootErr + "\n\n" +
+			"  " + stWarn.Render("提示：请确认微信 4.x 已登录，并右键“以管理员身份运行”本程序。") + "\n\n" +
+			"  " + stFaint.Render("q 退出")
 	}
 
-	var tabs []string
+	header := "  " + stBrand.Render("VOLTEYE")
+	meta := "微信已连接 · " + m.clock.Format("15:04:05")
+	gap := m.width - lipgloss.Width(header) - lipgloss.Width(meta) - 2
+	if gap < 1 {
+		gap = 1
+	}
+	header += strings.Repeat(" ", gap) + stHeaderMeta.Render(meta)
+
+	var nav []string
+	nav = append(nav, "")
 	for i, p := range m.panels {
-		label := fmt.Sprintf("%d %s", i+1, p.Title())
+		num := stFaint.Render(fmt.Sprintf("%d ", i+1))
 		if i == m.active {
-			tabs = append(tabs, styleTabActive.Render(label))
+			nav = append(nav, "  "+stAccentBold.Render("▍")+" "+num+stNavActive.Render(p.Title()))
 		} else {
-			tabs = append(tabs, styleTabIdle.Render(label))
+			nav = append(nav, "    "+num+stNavIdle.Render(p.Title()))
 		}
 	}
-	tabBar := lipgloss.JoinHorizontal(lipgloss.Top, tabs...)
+	sidebar := lipgloss.NewStyle().Width(sidebarWidth).Render(strings.Join(nav, "\n"))
 
-	sep := styleSeparator.Render(strings.Repeat("─", max(m.width, 1)))
-	help := m.panels[m.active].Help()
-	footer := styleFooter.Render(help + "  |  tab/数字:切换面板  q:退出")
+	title := "  " + stPanelTitle.Render(m.panels[m.active].Title())
+	body := title + "\n" + "  " + rule(m.contentWidth()-2) + "\n" + m.panels[m.active].View()
 
-	content := m.panels[m.active].View()
-	return lipgloss.JoinVertical(lipgloss.Left, tabBar, sep, content, sep, footer)
+	main := lipgloss.JoinHorizontal(lipgloss.Top, sidebar, body)
+
+	status := "  " + stDot.Render("●") + stStatus.Render(" 采集中")
+	if !m.lastPoll.IsZero() {
+		status += stStatus.Render(" · 轮询 " + compactAgo(m.lastPoll))
+	}
+	hints := stFaint.Render("tab 切换 · q 退出 · " + m.panels[m.active].Help())
+	status += "  " + hints
+
+	return lipgloss.JoinVertical(lipgloss.Left,
+		header,
+		"  "+rule(m.width-2),
+		main,
+		"  "+rule(m.width-2),
+		status,
+	)
 }
 
 func exePath() string {

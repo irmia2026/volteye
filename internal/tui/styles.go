@@ -3,41 +3,85 @@ package tui
 import "github.com/charmbracelet/lipgloss"
 
 var (
-	colorAccent = lipgloss.Color("#7aa2f7")
-	colorGood   = lipgloss.Color("#9ece6a")
-	colorWarn   = lipgloss.Color("#e0af68")
-	colorBad    = lipgloss.Color("#f7768e")
-	colorMuted  = lipgloss.Color("#565f89")
-	colorText   = lipgloss.Color("#c0caf5")
-	colorBright = lipgloss.Color("#ffffff")
+	colInk     = lipgloss.Color("#d7e0ea")
+	colMuted   = lipgloss.Color("#61707f")
+	colFaint   = lipgloss.Color("#33404d")
+	colAccent  = lipgloss.Color("#79b8d8")
+	colAccent2 = lipgloss.Color("#a9d3e8")
+	colPanel   = lipgloss.Color("#8fa8bb")
+	colOk      = lipgloss.Color("#82c4a6")
+	colWarn    = lipgloss.Color("#cfa15e")
+	colBad     = lipgloss.Color("#cf7d7d")
+	colCursor  = lipgloss.Color("#1c2733")
 
-	styleTabActive = lipgloss.NewStyle().
-			Foreground(colorBright).
-			Background(colorAccent).
-			Bold(true).
-			Padding(0, 1)
-	styleTabIdle = lipgloss.NewStyle().
-			Foreground(colorMuted).
-			Padding(0, 1)
-	styleFooter = lipgloss.NewStyle().
-			Foreground(colorMuted)
-	styleSeparator = lipgloss.NewStyle().
-			Foreground(colorMuted)
-	styleTitle = lipgloss.NewStyle().
-			Foreground(colorAccent).
+	stBrand = lipgloss.NewStyle().
+		Foreground(colAccent2).
+		Bold(true)
+
+	stHeaderMeta = lipgloss.NewStyle().
+			Foreground(colMuted)
+
+	stRule = lipgloss.NewStyle().
+		Foreground(colFaint)
+
+	stNavActive = lipgloss.NewStyle().
+			Foreground(colAccent2).
 			Bold(true)
-	styleBox = lipgloss.NewStyle().
-			Border(lipgloss.RoundedBorder()).
-			BorderForeground(colorMuted).
-			Padding(0, 1)
-	styleGood   = lipgloss.NewStyle().Foreground(colorGood)
-	styleWarn   = lipgloss.NewStyle().Foreground(colorWarn)
-	styleBad    = lipgloss.NewStyle().Foreground(colorBad)
-	styleMuted  = lipgloss.NewStyle().Foreground(colorMuted)
-	styleCursor = lipgloss.NewStyle().
-			Foreground(colorBright).
-			Background(lipgloss.Color("#283457"))
-	styleHeader = lipgloss.NewStyle().
-			Foreground(colorMuted).
+
+	stNavIdle = lipgloss.NewStyle().
+			Foreground(colMuted)
+
+	stPanelTitle = lipgloss.NewStyle().
+			Foreground(colPanel).
 			Bold(true)
+
+	stStatus = lipgloss.NewStyle().
+			Foreground(colMuted)
+
+	stDot = lipgloss.NewStyle().
+		Foreground(colOk)
+
+	stLabel = lipgloss.NewStyle().
+		Foreground(colMuted)
+
+	stValue = lipgloss.NewStyle().
+		Foreground(colInk).
+		Bold(true)
+
+	stAccent = lipgloss.NewStyle().
+			Foreground(colAccent)
+
+	stAccentBold = lipgloss.NewStyle().
+			Foreground(colAccent2).
+			Bold(true)
+
+	stWarn  = lipgloss.NewStyle().Foreground(colWarn)
+	stBad   = lipgloss.NewStyle().Foreground(colBad)
+	stOk    = lipgloss.NewStyle().Foreground(colOk)
+	stMuted = lipgloss.NewStyle().Foreground(colMuted)
+	stFaint = lipgloss.NewStyle().Foreground(colFaint)
+	stInk   = lipgloss.NewStyle().Foreground(colInk)
+
+	stCursorRow = lipgloss.NewStyle().
+			Foreground(colAccent2).
+			Bold(true)
+
+	stTableHead = lipgloss.NewStyle().
+			Foreground(colMuted)
+)
+
+var (
+	styleTabActive = stNavActive
+	styleTabIdle   = stNavIdle
+	styleFooter    = stStatus
+	styleSeparator = stRule
+	styleTitle     = stPanelTitle
+	styleBox       = lipgloss.NewStyle().Padding(0, 1)
+	styleGood      = stOk
+	styleWarn      = stWarn
+	styleBad       = stBad
+	styleMuted     = stMuted
+	styleCursor    = stCursorRow
+	styleHeader    = stTableHead
+	styleMatched   = lipgloss.NewStyle().Foreground(colWarn)
 )

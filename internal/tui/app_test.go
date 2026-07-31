@@ -104,9 +104,10 @@ func TestMessagesAndRulesPanels(t *testing.T) {
 
 	tm.Send(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'4'}})
 	teatest.WaitFor(t, tm.Output(), func(out []byte) bool {
-		return bytes.Contains(out, []byte("识别规则")) && bytes.Contains(out, []byte("工单,报修"))
+		return bytes.Contains(out, []byte("启用")) && bytes.Contains(out, []byte("工单,报修"))
 	}, teatest.WithCheckInterval(50*time.Millisecond), teatest.WithDuration(5*time.Second))
 
 	tm.Send(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'q'}})
 	tm.WaitFinished(t, teatest.WithFinalTimeout(3*time.Second))
 }
+
