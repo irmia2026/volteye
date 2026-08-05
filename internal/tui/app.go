@@ -19,6 +19,7 @@ type AppConfig struct {
 	Interval  time.Duration
 	KeyHex    string
 	Engine    *extract.Engine
+	TrayMode  bool
 	Boot      func(cfg AppConfig, send func(tea.Msg)) (*app.Service, error)
 }
 
@@ -72,7 +73,7 @@ func clockCmd() tea.Cmd {
 }
 
 func (m *rootModel) quit() (tea.Model, tea.Cmd) {
-	if m.svc != nil {
+	if !m.cfg.TrayMode && m.svc != nil {
 		m.svc.Stop()
 	}
 	return m, tea.Quit
@@ -242,7 +243,11 @@ func (m *rootModel) View() string {
 	if !m.lastPoll.IsZero() {
 		status += stStatus.Render(" · 轮询 " + compactAgo(m.lastPoll))
 	}
-	hints := stFaint.Render("tab 切换 · q 退出 · " + m.panels[m.active].Help())
+	quitHint := "q 退出"
+	if m.cfg.TrayMode {
+		quitHint = "q 隐藏到托盘"
+	}
+	hints := stFaint.Render("tab 切换 · " + quitHint + " · " + m.panels[m.active].Help())
 	status += "  " + hints
 
 	return lipgloss.JoinVertical(lipgloss.Left,
