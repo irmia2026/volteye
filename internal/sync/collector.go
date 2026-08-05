@@ -19,13 +19,14 @@ type Matcher interface {
 }
 
 type Config struct {
-	DBStorage  string
-	Key        []byte
-	Interval   time.Duration
-	WorkDir    string
-	Logf       func(string)
-	OnPollDone func(inserted int)
-	Matcher    Matcher
+	DBStorage    string
+	Key          []byte
+	Interval     time.Duration
+	GroupRefresh time.Duration
+	WorkDir      string
+	Logf         func(string)
+	OnPollDone   func(inserted int)
+	Matcher      Matcher
 }
 
 type fileSig struct {
@@ -34,14 +35,15 @@ type fileSig struct {
 }
 
 type Collector struct {
-	cfg      Config
-	interval atomic.Int64
-	st       *store.Store
-	srcDBs   []string
-	sigs     map[string]fileSig
-	tableDBs map[string][]string
-	encDir   string
-	decDir   string
+	cfg        Config
+	interval   atomic.Int64
+	st         *store.Store
+	srcDBs     []string
+	sigs       map[string]fileSig
+	tableDBs   map[string][]string
+	encDir     string
+	decDir     string
+	lastGroups time.Time
 }
 
 func New(cfg Config, st *store.Store) *Collector {
@@ -54,6 +56,9 @@ func New(cfg Config, st *store.Store) *Collector {
 		decDir:   filepath.Join(cfg.WorkDir, "dec"),
 	}
 	c.SetInterval(cfg.Interval)
+	if cfg.GroupRefresh <= 0 {
+		c.cfg.GroupRefresh = 10 * time.Minute
+	}
 	return c
 }
 
@@ -106,7 +111,6 @@ func (c *Collector) refresh() {
 
 		if sig, ok := sigOf(src); ok {
 			if prev, seen := c.sigs[src]; !seen || prev != sig {
-				c.sigs[src] = sig
 				if err := wechatdb.CopyFile(src, encCopy); err != nil {
 					c.log("copy %s failed: %v", base, err)
 					continue
@@ -115,6 +119,7 @@ func (c *Collector) refresh() {
 					c.log("decrypt %s failed: %v", base, err)
 					continue
 				}
+				c.sigs[src] = sig
 				os.Remove(decPath + "-wal")
 				delete(c.sigs, walSigKey(src))
 			}
@@ -123,7 +128,6 @@ func (c *Collector) refresh() {
 		walSrc := walSigKey(src)
 		if sig, ok := sigOf(walSrc); ok {
 			if prev, seen := c.sigs[walSrc]; !seen || prev != sig {
-				c.sigs[walSrc] = sig
 				walCopy := encCopy + "-wal"
 				if err := wechatdb.CopyFile(walSrc, walCopy); err != nil {
 					c.log("copy wal %s failed: %v", base, err)
@@ -131,7 +135,9 @@ func (c *Collector) refresh() {
 				}
 				if _, err := wechatdb.DecryptWAL(c.cfg.Key, encCopy, walCopy, decPath+"-wal"); err != nil {
 					c.log("decrypt wal %s failed: %v", base, err)
+					continue
 				}
+				c.sigs[walSrc] = sig
 			}
 		} else {
 			os.Remove(decPath + "-wal")
@@ -170,9 +176,22 @@ func (c *Collector) discover() {
 	}
 }
 
+func (c *Collector) RefreshGroups() (int, int, error) {
+	return DiscoverGroups(c.cfg.DBStorage, c.cfg.Key, c.encDir, c.decDir, c.st)
+}
+
 func (c *Collector) PollOnce() (int, error) {
 	c.refresh()
 	c.discover()
+
+	if time.Since(c.lastGroups) >= c.cfg.GroupRefresh {
+		if total, named, err := c.RefreshGroups(); err != nil {
+			c.log("refresh groups failed: %v", err)
+		} else {
+			c.lastGroups = time.Now()
+			c.log("群列表已刷新: %d 个群（%d 个有名称）", total, named)
+		}
+	}
 
 	groups, err := c.st.MonitoredGroups()
 	if err != nil {
@@ -230,10 +249,10 @@ func (c *Collector) syncShard(g store.Group, table, decPath string) (int, error)
 	ct, ss, lid := cur.CreateTime, cur.SortSeq, cur.LocalID
 	backfilling := false
 	switch {
-	case g.Backfill && !g.BackfillDone:
+	case g.Backfill && !cur.BackfillDone:
 		ct, ss, lid = 0, 0, 0
 		backfilling = true
-	case ct == 0 && ss == 0 && lid == 0 && !g.BackfillDone:
+	case ct == 0 && ss == 0 && lid == 0:
 		maxCT, maxSS, maxLID, err := wechatdb.LatestCursor(db, table)
 		if err != nil {
 			return 0, err
@@ -284,6 +303,9 @@ func (c *Collector) syncShard(g store.Group, table, decPath string) (int, error)
 		return inserted, err
 	}
 	if backfilling {
+		if err := c.st.MarkShardBackfillDone(g.Wxid, srcDB); err != nil {
+			return inserted, err
+		}
 		if err := c.st.SaveProgress(g.Wxid, ct, ss, lid, true); err != nil {
 			return inserted, err
 		}

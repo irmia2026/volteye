@@ -15,13 +15,32 @@ import (
 
 type overviewMatchedMsg struct{ rows []store.MessageRow }
 
+type overviewStatsMsg struct {
+	total     int64
+	matched   int64
+	monitored []store.Group
+	counts    map[string]int64
+	latest    map[string]int64
+}
+
+type overviewGrow struct {
+	name  string
+	count int64
+	last  int64
+}
+
 type overviewPanel struct {
 	st           *store.Store
 	w, h         int
 	lastPoll     time.Time
 	lastInserted int
 	polls        int
-	matched      []store.MessageRow
+	matchedRows  []store.MessageRow
+	total        int64
+	matchedCount int64
+	monitored    []store.Group
+	counts       map[string]int64
+	latest       map[string]int64
 }
 
 func newOverviewPanel(st *store.Store) Panel {
@@ -34,10 +53,20 @@ func (p *overviewPanel) CapturesInput() bool { return false }
 func (p *overviewPanel) SetSize(w, h int)    { p.w, p.h = w, h }
 
 func (p *overviewPanel) Init() tea.Cmd {
-	return func() tea.Msg {
-		rows, _ := p.st.QueryMessages(store.MessageFilter{OnlyMatched: true, Limit: 8})
-		return overviewMatchedMsg{rows: rows}
-	}
+	return tea.Batch(
+		func() tea.Msg {
+			total, _ := p.st.TotalMessages()
+			matched, _ := p.st.MatchedCount()
+			monitored, _ := p.st.MonitoredGroups()
+			counts, _ := p.st.GroupMessageCounts()
+			latest, _ := p.st.LatestTimes()
+			return overviewStatsMsg{total: total, matched: matched, monitored: monitored, counts: counts, latest: latest}
+		},
+		func() tea.Msg {
+			rows, _ := p.st.QueryMessages(store.MessageFilter{OnlyMatched: true, Limit: 8})
+			return overviewMatchedMsg{rows: rows}
+		},
+	)
 }
 
 func (p *overviewPanel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -47,8 +76,14 @@ func (p *overviewPanel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		p.lastInserted = msg.inserted
 		p.polls++
 		return p, p.Init()
+	case overviewStatsMsg:
+		p.total = msg.total
+		p.matchedCount = msg.matched
+		p.monitored = msg.monitored
+		p.counts = msg.counts
+		p.latest = msg.latest
 	case overviewMatchedMsg:
-		p.matched = msg.rows
+		p.matchedRows = msg.rows
 	}
 	return p, nil
 }
@@ -60,28 +95,17 @@ func statBlock(value, label string, width int) string {
 }
 
 func (p *overviewPanel) View() string {
-	total, _ := p.st.TotalMessages()
-	matched, _ := p.st.MatchedCount()
-	monitored, _ := p.st.MonitoredGroups()
-	counts, _ := p.st.GroupMessageCounts()
-	latest, _ := p.st.LatestTimes()
-
 	bw := max(12, (p.w-4)/4)
 	stats := lipgloss.JoinHorizontal(lipgloss.Top,
-		statBlock(fmt.Sprintf("%d", len(monitored)), "监控群", bw),
-		statBlock(fmt.Sprintf("%d", total), "落盘消息", bw),
-		statBlock(fmt.Sprintf("%d", matched), "规则匹配", bw),
+		statBlock(fmt.Sprintf("%d", len(p.monitored)), "监控群", bw),
+		statBlock(fmt.Sprintf("%d", p.total), "落盘消息", bw),
+		statBlock(fmt.Sprintf("%d", p.matchedCount), "规则匹配", bw),
 		statBlock(compactAgo(p.lastPoll), "最近轮询", bw),
 	)
 
-	type grow struct {
-		name  string
-		count int64
-		last  int64
-	}
-	var grows []grow
-	for _, g := range monitored {
-		grows = append(grows, grow{g.DisplayName(), counts[g.Wxid], latest[g.Wxid]})
+	var grows []overviewGrow
+	for _, g := range p.monitored {
+		grows = append(grows, overviewGrow{g.DisplayName(), p.counts[g.Wxid], p.latest[g.Wxid]})
 	}
 	sort.Slice(grows, func(i, j int) bool { return grows[i].last > grows[j].last })
 
@@ -106,10 +130,10 @@ func (p *overviewPanel) View() string {
 	var right strings.Builder
 	right.WriteString(stTableHead.Render("  最近匹配") + "\n")
 	right.WriteString("  " + rule(min(34, p.w/2-4)) + "\n")
-	if len(p.matched) == 0 {
+	if len(p.matchedRows) == 0 {
 		right.WriteString("  " + stMuted.Render("暂无匹配消息") + "\n")
 	}
-	for _, r := range p.matched {
+	for _, r := range p.matchedRows {
 		ts := time.Unix(r.CreateTime, 0).Format("01-02 15:04")
 		group := r.GroupName
 		if group == "" {

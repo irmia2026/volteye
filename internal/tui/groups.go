@@ -90,8 +90,7 @@ func (p *groupsPanel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return p, nil
 	case pollTickMsg:
-		p.counts, _ = p.st.GroupMessageCounts()
-		return p, nil
+		return p, p.reload
 	case tea.KeyMsg:
 		if p.editing {
 			switch msg.String() {

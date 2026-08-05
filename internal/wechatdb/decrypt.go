@@ -7,6 +7,7 @@ import (
 	"crypto/sha512"
 	"encoding/binary"
 	"fmt"
+	"io"
 	"os"
 
 	"golang.org/x/crypto/pbkdf2"
@@ -72,31 +73,66 @@ func DecryptPage(encKey, page []byte, pageNum uint32) ([]byte, error) {
 }
 
 func DecryptDB(rawKey []byte, src, dst string) (int, error) {
-	data, err := os.ReadFile(src)
+	in, err := os.Open(src)
 	if err != nil {
 		return 0, err
 	}
-	if len(data) < PageSize || len(data)%PageSize != 0 {
-		return 0, fmt.Errorf("db size %d not aligned to page size", len(data))
+	defer in.Close()
+	fi, err := in.Stat()
+	if err != nil {
+		return 0, err
 	}
-	salt := data[:SaltSize]
+	if fi.Size() < PageSize || fi.Size()%PageSize != 0 {
+		return 0, fmt.Errorf("db size %d not aligned to page size", fi.Size())
+	}
+	pages := int(fi.Size() / PageSize)
+
+	page1 := make([]byte, PageSize)
+	if _, err := io.ReadFull(in, page1); err != nil {
+		return 0, fmt.Errorf("read page 1: %w", err)
+	}
+	salt := page1[:SaltSize]
 	encKey := DeriveEncKey(rawKey, salt)
 	macKey := deriveMacKey(encKey, salt)
-	if !hmac.Equal(pageHMAC(macKey, data[:PageSize], 1), data[PageSize-HMACSize:PageSize]) {
+	if !hmac.Equal(pageHMAC(macKey, page1, 1), page1[PageSize-HMACSize:PageSize]) {
 		return 0, fmt.Errorf("page-1 HMAC mismatch: wrong key or corrupted db")
 	}
-	pages := len(data) / PageSize
-	out := make([]byte, len(data))
-	for p := 1; p <= pages; p++ {
-		page := data[(p-1)*PageSize : p*PageSize]
+
+	out, err := os.Create(dst)
+	if err != nil {
+		return 0, err
+	}
+	ok := false
+	defer func() {
+		out.Close()
+		if !ok {
+			os.Remove(dst)
+		}
+	}()
+
+	plain1, err := DecryptPage(encKey, page1, 1)
+	if err != nil {
+		return 0, fmt.Errorf("page 1: %w", err)
+	}
+	if _, err := out.Write(plain1); err != nil {
+		return 0, err
+	}
+	page := make([]byte, PageSize)
+	for p := 2; p <= pages; p++ {
+		if _, err := io.ReadFull(in, page); err != nil {
+			return 0, fmt.Errorf("read page %d: %w", p, err)
+		}
 		plain, err := DecryptPage(encKey, page, uint32(p))
 		if err != nil {
 			return 0, fmt.Errorf("page %d: %w", p, err)
 		}
-		copy(out[(p-1)*PageSize:], plain)
+		if _, err := out.Write(plain); err != nil {
+			return 0, err
+		}
 	}
-	if err := os.WriteFile(dst, out, 0644); err != nil {
+	if err := out.Sync(); err != nil {
 		return 0, err
 	}
+	ok = true
 	return pages, nil
 }

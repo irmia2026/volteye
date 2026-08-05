@@ -391,7 +391,6 @@ func ChatroomNames(contactDB *sql.DB) map[string]string {
 		if err != nil {
 			continue
 		}
-		defer rows.Close()
 		for rows.Next() {
 			var u string
 			var n sql.NullString
@@ -399,6 +398,7 @@ func ChatroomNames(contactDB *sql.DB) map[string]string {
 				out[u] = n.String
 			}
 		}
+		rows.Close()
 		return out
 	}
 	return out

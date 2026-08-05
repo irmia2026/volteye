@@ -2,8 +2,6 @@ package tui
 
 import (
 	"fmt"
-	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -11,9 +9,8 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
+	"volteye/internal/app"
 	"volteye/internal/extract"
-	"volteye/internal/store"
-	"volteye/internal/sync"
 )
 
 type AppConfig struct {
@@ -22,7 +19,7 @@ type AppConfig struct {
 	Interval  time.Duration
 	KeyHex    string
 	Engine    *extract.Engine
-	Boot      func(cfg AppConfig, send func(tea.Msg)) (*store.Store, *sync.Collector, error)
+	Boot      func(cfg AppConfig, send func(tea.Msg)) (*app.Service, error)
 }
 
 type clockTickMsg time.Time
@@ -37,8 +34,7 @@ type rootModel struct {
 	booting  bool
 	bootLog  []string
 	bootErr  string
-	st       *store.Store
-	col      *sync.Collector
+	svc      *app.Service
 	lastPoll time.Time
 	clock    time.Time
 }
@@ -62,8 +58,8 @@ func (m *rootModel) Init() tea.Cmd {
 			if boot == nil {
 				boot = DefaultBoot
 			}
-			st, col, err := boot(m.cfg, m.send)
-			return bootDoneMsg{st: st, col: col, err: err}
+			svc, err := boot(m.cfg, m.send)
+			return bootDoneMsg{svc: svc, err: err}
 		},
 		clockCmd(),
 	)
@@ -73,6 +69,13 @@ func clockCmd() tea.Cmd {
 	return tea.Tick(time.Second, func(t time.Time) tea.Msg {
 		return clockTickMsg(t)
 	})
+}
+
+func (m *rootModel) quit() (tea.Model, tea.Cmd) {
+	if m.svc != nil {
+		m.svc.Stop()
+	}
+	return m, tea.Quit
 }
 
 func (m *rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -95,14 +98,14 @@ func (m *rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.bootErr = msg.err.Error()
 			return m, nil
 		}
-		m.st, m.col = msg.st, msg.col
+		m.svc = msg.svc
 		m.panels = []Panel{
-			newOverviewPanel(m.st),
-			newGroupsPanel(m.st),
-			newMessagesPanel(m.st, m.cfg.Engine),
-			newRulesPanel(m.st, m.cfg.Engine),
-			newExportPanel(m.st, m.cfg.DataDir),
-			newSettingsPanel(m.st, m.col, m.cfg.DataDir, filepath.Join(m.cfg.DataDir, "volteye.db"), exePath()),
+			newOverviewPanel(m.svc.St),
+			newGroupsPanel(m.svc.St),
+			newMessagesPanel(m.svc.St, m.cfg.Engine),
+			newRulesPanel(m.svc),
+			newExportPanel(m.svc),
+			newSettingsPanel(m.svc),
 			newLogsPanel(),
 		}
 		if m.width > 0 {
@@ -110,7 +113,8 @@ func (m *rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				p.SetSize(m.contentWidth(), m.contentHeight())
 			}
 		}
-		cmds := []tea.Cmd{startCollectorCmd(m.col)}
+		m.svc.Start()
+		var cmds []tea.Cmd
 		for _, p := range m.panels {
 			cmds = append(cmds, p.Init())
 		}
@@ -120,13 +124,13 @@ func (m *rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyMsg:
 		if m.booting || m.bootErr != "" {
 			if msg.String() == "ctrl+c" || msg.String() == "q" {
-				return m, tea.Quit
+				return m.quit()
 			}
 			return m, nil
 		}
 		if m.panels[m.active].CapturesInput() {
 			if msg.String() == "ctrl+c" {
-				return m, tea.Quit
+				return m.quit()
 			}
 			nm, cmd := m.panels[m.active].Update(msg)
 			m.panels[m.active] = nm.(Panel)
@@ -134,7 +138,7 @@ func (m *rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		switch msg.String() {
 		case "ctrl+c", "q":
-			return m, tea.Quit
+			return m.quit()
 		case "tab":
 			m.active = (m.active + 1) % len(m.panels)
 			return m, nil
@@ -160,16 +164,6 @@ func (m *rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		cmds = append(cmds, cmd)
 	}
 	return m, tea.Batch(cmds...)
-}
-
-func startCollectorCmd(col *sync.Collector) tea.Cmd {
-	if col == nil {
-		return nil
-	}
-	return func() tea.Msg {
-		_ = col.Run(nilContext())
-		return nil
-	}
 }
 
 const sidebarWidth = 14
@@ -258,14 +252,6 @@ func (m *rootModel) View() string {
 		"  "+rule(m.width-2),
 		status,
 	)
-}
-
-func exePath() string {
-	p, err := os.Executable()
-	if err != nil {
-		return ""
-	}
-	return p
 }
 
 func max(a, b int) int {

@@ -1,10 +1,10 @@
 //go:build windows
 
-package tui
+package app
 
 import "golang.org/x/sys/windows"
 
-func windows_GetCurrentProcessTokenIsElevated() bool {
+func IsElevated() bool {
 	token := windows.GetCurrentProcessToken()
 	return token.IsElevated()
 }

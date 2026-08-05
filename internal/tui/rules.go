@@ -7,11 +7,16 @@ import (
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 
-	"volteye/internal/extract"
+	"volteye/internal/app"
 	"volteye/internal/store"
 )
 
 type rulesLoadedMsg struct{ rules []store.Rule }
+
+type rescanDoneMsg struct {
+	n   int64
+	err error
+}
 
 type ruleForm struct {
 	step    int
@@ -23,8 +28,8 @@ type ruleForm struct {
 }
 
 type rulesPanel struct {
+	svc       *app.Service
 	st        *store.Store
-	engine    *extract.Engine
 	rules     []store.Rule
 	cursor    int
 	offset    int
@@ -34,8 +39,8 @@ type rulesPanel struct {
 	status    string
 }
 
-func newRulesPanel(st *store.Store, engine *extract.Engine) Panel {
-	return &rulesPanel{st: st, engine: engine}
+func newRulesPanel(svc *app.Service) Panel {
+	return &rulesPanel{svc: svc, st: svc.St}
 }
 
 func (p *rulesPanel) Title() string { return "规则" }
@@ -47,7 +52,7 @@ func (p *rulesPanel) Help() string {
 	if p.confirmID != 0 {
 		return "y 确认删除 · n/Esc 取消"
 	}
-	return "↑↓ 移动 · 空格 启停 · n 新建 · d 删除 · r 刷新"
+	return "↑↓ 移动 · 空格 启停 · n 新建 · d 删除 · R 重扫全部 · r 刷新"
 }
 
 func (p *rulesPanel) CapturesInput() bool { return p.form != nil || p.confirmID != 0 }
@@ -61,31 +66,6 @@ func (p *rulesPanel) reload() tea.Msg {
 		return logMsg{text: "load rules: " + err.Error()}
 	}
 	return rulesLoadedMsg{rules: rules}
-}
-
-func (p *rulesPanel) syncEngine() tea.Cmd {
-	return func() tea.Msg {
-		rules, err := p.st.ListRules()
-		if err != nil {
-			return logMsg{text: "load rules: " + err.Error()}
-		}
-		var erules []extract.Rule
-		for _, r := range rules {
-			var kws []string
-			for _, kw := range strings.Split(r.Keywords, ",") {
-				if kw = strings.TrimSpace(kw); kw != "" {
-					kws = append(kws, kw)
-				}
-			}
-			erules = append(erules, extract.Rule{
-				ID: r.ID, Name: r.Name, Keywords: kws, Regex: r.Regex, Enabled: r.Enabled,
-			})
-		}
-		if err := p.engine.Load(erules); err != nil {
-			return logMsg{text: "compile rules: " + err.Error()}
-		}
-		return rulesLoadedMsg{rules: rules}
-	}
 }
 
 func newRuleForm() *ruleForm {
@@ -119,6 +99,13 @@ func (p *rulesPanel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			p.cursor = max(0, len(p.rules)-1)
 		}
 		return p, nil
+	case rescanDoneMsg:
+		if msg.err != nil {
+			p.status = "重扫失败: " + msg.err.Error()
+		} else {
+			p.status = fmt.Sprintf("已重置 %d 条消息，将在下轮轮询重新匹配", msg.n)
+		}
+		return p, nil
 	case tea.KeyMsg:
 		if p.form != nil {
 			return p.updateForm(msg)
@@ -126,11 +113,11 @@ func (p *rulesPanel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if p.confirmID != 0 {
 			switch msg.String() {
 			case "y":
-				if err := p.st.DeleteRule(p.confirmID); err != nil {
+				if err := p.svc.DeleteRule(p.confirmID); err != nil {
 					p.status = err.Error()
 				}
 				p.confirmID = 0
-				return p, p.syncEngine()
+				return p, p.reload
 			default:
 				p.confirmID = 0
 				return p, nil
@@ -147,10 +134,10 @@ func (p *rulesPanel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		case " ":
 			if r := p.current(); r != nil {
-				if err := p.st.SetRuleEnabled(r.ID, !r.Enabled); err != nil {
+				if err := p.svc.SetRuleEnabled(r.ID, !r.Enabled); err != nil {
 					p.status = err.Error()
 				}
-				return p, p.syncEngine()
+				return p, p.reload
 			}
 		case "n":
 			p.form = newRuleForm()
@@ -160,6 +147,11 @@ func (p *rulesPanel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				p.confirmID = r.ID
 			}
 			return p, nil
+		case "R":
+			return p, func() tea.Msg {
+				n, err := p.svc.RescanAll()
+				return rescanDoneMsg{n: n, err: err}
+			}
 		case "r":
 			return p, p.reload
 		}
@@ -176,35 +168,23 @@ func (p *rulesPanel) updateForm(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if msg.String() == "enter" {
 		switch f.step {
 		case 0:
-			f.nameVal = strings.TrimSpace(f.name.Value())
-			if f.nameVal == "" {
-				p.status = "名称不能为空"
-				return p, nil
-			}
+			f.nameVal = f.name.Value()
 			f.step = 1
 			f.name.Blur()
 			return p, f.kws.Focus()
 		case 1:
-			f.keyword = strings.TrimSpace(f.kws.Value())
+			f.keyword = f.kws.Value()
 			f.step = 2
 			f.kws.Blur()
 			return p, f.re.Focus()
 		case 2:
-			reText := strings.TrimSpace(f.re.Value())
-			if reText != "" {
-				probe := extract.NewEngine()
-				if err := probe.Load([]extract.Rule{{Name: "probe", Regex: reText, Enabled: true}}); err != nil {
-					p.status = "正则无效: " + err.Error()
-					return p, nil
-				}
-			}
-			if _, err := p.st.AddRule(f.nameVal, f.keyword, reText); err != nil {
+			if err := p.svc.AddRule(f.nameVal, f.keyword, f.re.Value()); err != nil {
 				p.status = err.Error()
-			} else {
-				p.status = ""
+				return p, nil
 			}
+			p.status = ""
 			p.form = nil
-			return p, p.syncEngine()
+			return p, p.reload
 		}
 	}
 	var cmd tea.Cmd

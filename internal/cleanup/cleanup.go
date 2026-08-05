@@ -23,8 +23,15 @@ func FromSettings(st *store.Store) Policy {
 }
 
 func archivePath(dataDir, reason string) string {
-	return filepath.Join(dataDir, "archive",
-		fmt.Sprintf("messages_%s_%s.xlsx", time.Now().Format("20060102_150405"), reason))
+	base := filepath.Join(dataDir, "archive",
+		fmt.Sprintf("messages_%s_%s", time.Now().Format("20060102_150405"), reason))
+	p := base + ".xlsx"
+	for i := 2; ; i++ {
+		if _, err := os.Stat(p); os.IsNotExist(err) {
+			return p
+		}
+		p = fmt.Sprintf("%s_%d.xlsx", base, i)
+	}
 }
 
 func archive(st *store.Store, dataDir, reason string, before int64, logf func(string)) {
@@ -43,6 +50,19 @@ func archive(st *store.Store, dataDir, reason string, before int64, logf func(st
 		return
 	}
 	logf(fmt.Sprintf("清理前已归档 %d 条: %s", count, path))
+}
+
+func ArchiveAll(st *store.Store, dataDir string) (int, string, error) {
+	path := archivePath(dataDir, "full")
+	count, err := export.MessagesXLSX(st, export.Options{}, path)
+	if err != nil {
+		return 0, "", err
+	}
+	if count == 0 {
+		os.Remove(path)
+		return 0, "", nil
+	}
+	return count, path, nil
 }
 
 func RunOnce(st *store.Store, dataDir, dbPath string, logf func(string)) {
@@ -73,14 +93,15 @@ func RunOnce(st *store.Store, dataDir, dbPath string, logf func(string)) {
 					break
 				}
 				logf(fmt.Sprintf("超出容量上限 %dMB，清理最旧 %d 条", p.MaxDBMB, n))
-				st.Vacuum()
 				if fi, err := os.Stat(dbPath); err != nil || fi.Size() <= limit {
 					break
 				}
 			}
 		}
 	}
-	st.Vacuum()
+	if err := st.Vacuum(); err != nil {
+		logf(fmt.Sprintf("VACUUM 失败（数据库忙，下个周期重试）: %v", err))
+	}
 }
 
 func StartLoop(st *store.Store, dataDir, dbPath string, interval time.Duration, logf func(string)) {

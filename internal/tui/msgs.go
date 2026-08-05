@@ -3,15 +3,13 @@ package tui
 import (
 	"time"
 
-	"volteye/internal/store"
-	"volteye/internal/sync"
+	"volteye/internal/app"
 )
 
 type bootStepMsg struct{ text string }
 
 type bootDoneMsg struct {
-	st  *store.Store
-	col *sync.Collector
+	svc *app.Service
 	err error
 }
 

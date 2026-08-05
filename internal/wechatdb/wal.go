@@ -3,6 +3,7 @@ package wechatdb
 import (
 	"encoding/binary"
 	"fmt"
+	"io"
 	"os"
 )
 
@@ -30,14 +31,17 @@ func walChecksum(data []byte, s1, s2 uint32, bigEndian bool) (uint32, uint32) {
 }
 
 func DecryptWAL(rawKey []byte, encMainPath, walPath, dstPath string) (int, error) {
-	mainFirst, err := os.ReadFile(encMainPath)
+	mf, err := os.Open(encMainPath)
 	if err != nil {
 		return 0, err
 	}
-	if len(mainFirst) < PageSize {
+	salt := make([]byte, SaltSize)
+	if _, err := io.ReadFull(mf, salt); err != nil {
+		mf.Close()
 		return 0, fmt.Errorf("main db too small for salt")
 	}
-	encKey := DeriveEncKey(rawKey, mainFirst[:SaltSize])
+	mf.Close()
+	encKey := DeriveEncKey(rawKey, salt)
 
 	data, err := os.ReadFile(walPath)
 	if err != nil {

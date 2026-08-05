@@ -72,6 +72,7 @@ CREATE TABLE IF NOT EXISTS sync_cursors(
 	create_time INTEGER NOT NULL DEFAULT 0,
 	sort_seq INTEGER NOT NULL DEFAULT 0,
 	local_id INTEGER NOT NULL DEFAULT 0,
+	backfill_done INTEGER NOT NULL DEFAULT 0,
 	PRIMARY KEY(group_wxid, src_db)
 );
 CREATE INDEX IF NOT EXISTS idx_messages_group_time ON messages(group_wxid, create_time);
@@ -108,7 +109,42 @@ func Open(path string) (*Store, error) {
 		db.Close()
 		return nil, fmt.Errorf("migrate messages: %w", err)
 	}
+	if err := migrateShardBackfill(db); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("migrate shard backfill: %w", err)
+	}
 	return &Store{db: db}, nil
+}
+
+func migrateShardBackfill(db *sql.DB) error {
+	rows, err := db.Query(`PRAGMA table_info(sync_cursors)`)
+	if err != nil {
+		return err
+	}
+	exists := false
+	for rows.Next() {
+		var cid int
+		var name, ctype string
+		var notnull, pk int
+		var dflt sql.NullString
+		if err := rows.Scan(&cid, &name, &ctype, &notnull, &dflt, &pk); err != nil {
+			rows.Close()
+			return err
+		}
+		if name == "backfill_done" {
+			exists = true
+		}
+	}
+	rows.Close()
+	if exists {
+		return nil
+	}
+	if _, err := db.Exec(`ALTER TABLE sync_cursors ADD COLUMN backfill_done INTEGER NOT NULL DEFAULT 0`); err != nil {
+		return err
+	}
+	_, err = db.Exec(`UPDATE sync_cursors SET backfill_done =
+		COALESCE((SELECT backfill_done FROM groups WHERE groups.wxid = sync_cursors.group_wxid), 0)`)
+	return err
 }
 
 func migrateMessagesUnique(db *sql.DB) error {
@@ -649,18 +685,21 @@ func (s *Store) SetGroupAlias(wxid, alias string) error {
 }
 
 type ShardCursor struct {
-	CreateTime int64
-	SortSeq    int64
-	LocalID    int64
+	CreateTime   int64
+	SortSeq      int64
+	LocalID      int64
+	BackfillDone bool
 }
 
 func (s *Store) GetShardCursor(groupWxid, srcDB string) (ShardCursor, error) {
 	var c ShardCursor
-	err := s.db.QueryRow("SELECT create_time, sort_seq, local_id FROM sync_cursors WHERE group_wxid=? AND src_db=?",
-		groupWxid, srcDB).Scan(&c.CreateTime, &c.SortSeq, &c.LocalID)
+	var bfd int
+	err := s.db.QueryRow("SELECT create_time, sort_seq, local_id, backfill_done FROM sync_cursors WHERE group_wxid=? AND src_db=?",
+		groupWxid, srcDB).Scan(&c.CreateTime, &c.SortSeq, &c.LocalID, &bfd)
 	if err == sql.ErrNoRows {
 		return ShardCursor{}, nil
 	}
+	c.BackfillDone = bfd != 0
 	return c, err
 }
 
@@ -670,6 +709,22 @@ func (s *Store) SaveShardCursor(groupWxid, srcDB string, c ShardCursor) error {
 			" ON CONFLICT(group_wxid, src_db) DO UPDATE SET create_time=excluded.create_time, sort_seq=excluded.sort_seq, local_id=excluded.local_id",
 		groupWxid, srcDB, c.CreateTime, c.SortSeq, c.LocalID)
 	return err
+}
+
+func (s *Store) MarkShardBackfillDone(groupWxid, srcDB string) error {
+	_, err := s.db.Exec(
+		"INSERT INTO sync_cursors(group_wxid, src_db, backfill_done) VALUES(?,?,1)"+
+			" ON CONFLICT(group_wxid, src_db) DO UPDATE SET backfill_done=1",
+		groupWxid, srcDB)
+	return err
+}
+
+func (s *Store) ResetScanned() (int64, error) {
+	res, err := s.db.Exec(`UPDATE messages SET scanned = 0`)
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
 }
 
 func (s *Store) ResetAllCursors() error {

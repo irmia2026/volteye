@@ -10,6 +10,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
+	"volteye/internal/app"
 	"volteye/internal/export"
 	"volteye/internal/store"
 )
@@ -29,6 +30,7 @@ type exportFile struct {
 }
 
 type exportPanel struct {
+	svc      *app.Service
 	st       *store.Store
 	dataDir  string
 	groups   []store.Group
@@ -46,8 +48,8 @@ var scopeLabels = []string{"全部消息", "仅匹配消息"}
 var rangeLabels = []string{"全部时间", "最近1天", "最近7天", "最近30天"}
 var rangeDays = []int{0, 1, 7, 30}
 
-func newExportPanel(st *store.Store, dataDir string) Panel {
-	return &exportPanel{st: st, dataDir: dataDir}
+func newExportPanel(svc *app.Service) Panel {
+	return &exportPanel{svc: svc, st: svc.St, dataDir: svc.DataDir}
 }
 
 func (p *exportPanel) Title() string { return "导出" }
@@ -99,9 +101,9 @@ func (p *exportPanel) runExport() tea.Cmd {
 	}
 	outPath := filepath.Join(p.dataDir, "exports",
 		fmt.Sprintf("messages_%s.xlsx", time.Now().Format("20060102_150405")))
-	st := p.st
+	svc := p.svc
 	return func() tea.Msg {
-		n, err := export.MessagesXLSX(st, opts, outPath)
+		n, err := svc.ExportMessages(opts, outPath)
 		return exportDoneMsg{count: n, path: outPath, err: err}
 	}
 }
@@ -181,11 +183,7 @@ func (p *exportPanel) View() string {
 	sb.WriteString(styleTitle.Render("导出设置") + "\n")
 	groupLabel := "全部监控群"
 	if p.groupIdx > 0 && p.groupIdx-1 < len(p.groups) {
-		g := p.groups[p.groupIdx-1]
-		groupLabel = g.Name
-		if groupLabel == "" {
-			groupLabel = g.Wxid
-		}
+		groupLabel = p.groups[p.groupIdx-1].DisplayName()
 	}
 	sb.WriteString(p.optionLine(0, "群", groupLabel) + "\n")
 	sb.WriteString(p.optionLine(1, "内容", scopeLabels[p.scope]) + "\n")

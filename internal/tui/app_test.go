@@ -9,15 +9,15 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/x/exp/teatest"
 
+	"volteye/internal/app"
 	"volteye/internal/extract"
 	"volteye/internal/store"
-	"volteye/internal/sync"
 )
 
-func fakeBoot(st *store.Store) func(AppConfig, func(tea.Msg)) (*store.Store, *sync.Collector, error) {
-	return func(cfg AppConfig, send func(tea.Msg)) (*store.Store, *sync.Collector, error) {
+func fakeBoot(st *store.Store) func(AppConfig, func(tea.Msg)) (*app.Service, error) {
+	return func(cfg AppConfig, send func(tea.Msg)) (*app.Service, error) {
 		send(bootStepMsg{text: "fake boot step"})
-		return st, nil, nil
+		return app.NewService(st, nil, cfg.Engine, cfg.DataDir, nil), nil
 	}
 }
 

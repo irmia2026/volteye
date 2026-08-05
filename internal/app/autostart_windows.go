@@ -1,6 +1,6 @@
 //go:build windows
 
-package tui
+package app
 
 import (
 	"golang.org/x/sys/windows/registry"
@@ -9,7 +9,7 @@ import (
 const runKeyPath = `SOFTWARE\Microsoft\Windows\CurrentVersion\Run`
 const runValueName = "VoltEye"
 
-func setAutoStart(enable bool, exePath string) error {
+func SetAutoStart(enable bool, exePath string) error {
 	k, err := registry.OpenKey(registry.CURRENT_USER, runKeyPath, registry.SET_VALUE)
 	if err != nil {
 		return err
@@ -24,7 +24,7 @@ func setAutoStart(enable bool, exePath string) error {
 	return nil
 }
 
-func isAutoStartEnabled() bool {
+func IsAutoStartEnabled() bool {
 	k, err := registry.OpenKey(registry.CURRENT_USER, runKeyPath, registry.QUERY_VALUE)
 	if err != nil {
 		return false
@@ -32,8 +32,4 @@ func isAutoStartEnabled() bool {
 	defer k.Close()
 	_, _, err = k.GetStringValue(runValueName)
 	return err == nil
-}
-
-func isElevated() bool {
-	return windows_GetCurrentProcessTokenIsElevated()
 }
