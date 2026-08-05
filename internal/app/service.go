@@ -333,6 +333,18 @@ func (s *Service) SetAutoStart(enable bool) error {
 	return SetAutoStart(enable, s.ExePath)
 }
 
+func (s *Service) TrayEnabled() bool {
+	return s.St.GetSetting("tray_enabled", "0") == "1"
+}
+
+func (s *Service) SetTrayEnabled(enable bool) error {
+	v := "0"
+	if enable {
+		v = "1"
+	}
+	return s.St.SetSetting("tray_enabled", v)
+}
+
 func (s *Service) RefreshGroups() (int, int, error) {
 	if s.Col == nil {
 		return 0, 0, fmt.Errorf("采集器未启动")

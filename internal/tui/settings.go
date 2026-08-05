@@ -27,6 +27,7 @@ type settingsPanel struct {
 	mbOpts    []int
 	mbIdx     int
 	autoStart bool
+	trayOn    bool
 	confirm   string
 	status    string
 	w, h      int
@@ -39,6 +40,7 @@ func newSettingsPanel(svc *app.Service) Panel {
 		daysOpts:  []int{0, 30, 90, 180, 365},
 		mbOpts:    []int{0, 100, 500, 1000, 5000},
 		autoStart: app.IsAutoStartEnabled(),
+		trayOn:    svc.TrayEnabled(),
 	}
 	p.loadFromSettings()
 	return p
@@ -130,6 +132,13 @@ func (p *settingsPanel) applyRow() {
 				p.status = "已关闭开机自启"
 			}
 		}
+	case 4:
+		if err := p.svc.SetTrayEnabled(p.trayOn); err != nil {
+			p.trayOn = !p.trayOn
+			p.status = "托盘设置失败: " + err.Error()
+		} else {
+			p.status = "托盘设置已保存，重启后生效"
+		}
 	}
 }
 
@@ -168,7 +177,7 @@ func (p *settingsPanel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				p.sel--
 			}
 		case "down", "j":
-			if p.sel < 3 {
+			if p.sel < 4 {
 				p.sel++
 			}
 		case "left", "h":
@@ -204,6 +213,8 @@ func (p *settingsPanel) adjust(delta int) {
 		p.mbIdx = wrap(p.mbIdx+delta, len(p.mbOpts))
 	case 3:
 		p.autoStart = !p.autoStart
+	case 4:
+		p.trayOn = !p.trayOn
 	}
 	p.applyRow()
 }
@@ -227,6 +238,11 @@ func (p *settingsPanel) View() string {
 		autoLabel = "开启"
 	}
 	sb.WriteString(p.row(3, "开机自启", autoLabel) + "\n")
+	trayLabel := "关闭"
+	if p.trayOn {
+		trayLabel = "开启"
+	}
+	sb.WriteString(p.row(4, "托盘驻留", trayLabel) + "\n")
 	sb.WriteString("\n" + styleMuted.Render("  数据目录: "+p.svc.DataDir) + "\n")
 	sb.WriteString(styleMuted.Render("  x: 立即执行清理策略    c: 清空全部消息（先自动归档）") + "\n")
 	if p.confirm == "clear" {

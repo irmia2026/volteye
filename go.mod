@@ -7,7 +7,9 @@ require (
 	github.com/charmbracelet/bubbletea v1.3.10
 	github.com/charmbracelet/lipgloss v1.1.0
 	github.com/charmbracelet/x/exp/teatest v0.0.0-20260730164118-7e2d3e6c5238
+	github.com/energye/systray v1.0.3
 	github.com/klauspost/compress v1.19.1
+	github.com/xuri/excelize/v2 v2.11.0
 	golang.org/x/crypto v0.54.0
 	golang.org/x/sys v0.47.0
 	modernc.org/sqlite v1.55.0
@@ -27,6 +29,7 @@ require (
 	github.com/clipperhouse/uax29/v2 v2.5.0 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/erikgeiser/coninput v0.0.0-20211004153227-1c3628e74d0f // indirect
+	github.com/godbus/dbus/v5 v5.1.0 // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/lucasb-eyer/go-colorful v1.3.0 // indirect
 	github.com/mattn/go-isatty v0.0.20 // indirect
@@ -43,7 +46,6 @@ require (
 	github.com/tiendc/go-deepcopy v1.7.2 // indirect
 	github.com/xo/terminfo v0.0.0-20220910002029-abceb7e1c41e // indirect
 	github.com/xuri/efp v0.0.1 // indirect
-	github.com/xuri/excelize/v2 v2.11.0 // indirect
 	github.com/xuri/nfp v0.0.2-0.20250530014748-2ddeb826f9a9 // indirect
 	golang.org/x/net v0.56.0 // indirect
 	golang.org/x/text v0.40.0 // indirect
