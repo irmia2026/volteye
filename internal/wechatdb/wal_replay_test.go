@@ -149,7 +149,7 @@ func TestDecryptWALGenerationFiltering(t *testing.T) {
 		wal := buildWalForTest(curSalt[0], curSalt[1], [][]byte{encPage2}, [][2]uint32{oldSalt}, 2, 2)
 		src := filepath.Join(dir, "src-wal")
 		os.WriteFile(src, wal, 0644)
-		frames, err := DecryptWAL(rawKey, encMain, src, dec+"-wal")
+		frames, err := DecryptWAL(rawKey, salt, src, dec+"-wal")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -165,7 +165,7 @@ func TestDecryptWALGenerationFiltering(t *testing.T) {
 		mixed := buildWalForTest(curSalt[0], curSalt[1], [][]byte{encPage2, encPage2}, [][2]uint32{oldSalt, curSalt}, 2, 2)
 		src := filepath.Join(dir, "src-wal2")
 		os.WriteFile(src, mixed, 0644)
-		frames, err := DecryptWAL(rawKey, encMain, src, dec+"-wal")
+		frames, err := DecryptWAL(rawKey, salt, src, dec+"-wal")
 		if err != nil {
 			t.Fatal(err)
 		}

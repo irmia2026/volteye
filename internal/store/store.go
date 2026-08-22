@@ -87,6 +87,47 @@ CREATE TABLE IF NOT EXISTS settings(
 	key TEXT PRIMARY KEY,
 	value TEXT NOT NULL DEFAULT ''
 );
+CREATE TABLE IF NOT EXISTS work_orders(
+	id INTEGER PRIMARY KEY AUTOINCREMENT,
+	order_no TEXT NOT NULL UNIQUE,
+	format TEXT NOT NULL DEFAULT '',
+	priority TEXT NOT NULL DEFAULT '',
+	category TEXT NOT NULL DEFAULT '',
+	dispatch_time INTEGER NOT NULL DEFAULT 0,
+	address TEXT NOT NULL DEFAULT '',
+	description TEXT NOT NULL DEFAULT '',
+	contact_name TEXT NOT NULL DEFAULT '',
+	contact_way TEXT NOT NULL DEFAULT '',
+	contact_phone TEXT NOT NULL DEFAULT '',
+	user_no TEXT NOT NULL DEFAULT '',
+	user_name TEXT NOT NULL DEFAULT '',
+	group_wxid TEXT NOT NULL DEFAULT '',
+	sender_wxid TEXT NOT NULL DEFAULT '',
+	src_db TEXT NOT NULL DEFAULT '',
+	msg_local_id INTEGER NOT NULL DEFAULT 0,
+	create_time INTEGER NOT NULL DEFAULT 0,
+	raw TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_work_orders_dispatch ON work_orders(dispatch_time);
+CREATE TABLE IF NOT EXISTS parse_errors(
+	id INTEGER PRIMARY KEY AUTOINCREMENT,
+	message_id INTEGER NOT NULL DEFAULT 0,
+	format TEXT NOT NULL DEFAULT '',
+	reason TEXT NOT NULL DEFAULT '',
+	content TEXT NOT NULL DEFAULT '',
+	create_time INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS formats(
+	id INTEGER PRIMARY KEY AUTOINCREMENT,
+	name TEXT NOT NULL UNIQUE,
+	kind TEXT NOT NULL DEFAULT 'bracketkv',
+	signature TEXT NOT NULL DEFAULT '',
+	open_b TEXT NOT NULL DEFAULT '【',
+	close_b TEXT NOT NULL DEFAULT '】',
+	aliases TEXT NOT NULL DEFAULT '',
+	category_key TEXT NOT NULL DEFAULT '',
+	enabled INTEGER NOT NULL DEFAULT 1
+);
 `
 
 func Open(path string) (*Store, error) {
@@ -113,7 +154,12 @@ func Open(path string) (*Store, error) {
 		db.Close()
 		return nil, fmt.Errorf("migrate shard backfill: %w", err)
 	}
-	return &Store{db: db}, nil
+	s := &Store{db: db}
+	if err := s.SeedFormats(); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("seed formats: %w", err)
+	}
+	return s, nil
 }
 
 func migrateShardBackfill(db *sql.DB) error {
@@ -208,6 +254,7 @@ func migrateColumns(db *sql.DB) error {
 		{"messages", "scanned", `ALTER TABLE messages ADD COLUMN scanned INTEGER NOT NULL DEFAULT 0`},
 		{"groups", "alias", `ALTER TABLE groups ADD COLUMN alias TEXT NOT NULL DEFAULT ''`},
 		{"messages", "src_db", `ALTER TABLE messages ADD COLUMN src_db TEXT NOT NULL DEFAULT ''`},
+		{"work_orders", "contact_way", `ALTER TABLE work_orders ADD COLUMN contact_way TEXT NOT NULL DEFAULT ''`},
 	}
 	for _, m := range migrate {
 		exists := false
@@ -530,12 +577,19 @@ func (s *Store) QueryMessages(f MessageFilter) ([]MessageRow, error) {
 }
 
 type UnscannedMessage struct {
-	ID      int64
-	Content string
+	ID         int64
+	GroupWxid  string
+	SenderWxid string
+	SrcDB      string
+	LocalID    int64
+	CreateTime int64
+	Content    string
 }
 
 func (s *Store) UnscannedMessages(limit int) ([]UnscannedMessage, error) {
-	rows, err := s.db.Query(`SELECT id, content FROM messages WHERE scanned = 0 ORDER BY id LIMIT ?`, limit)
+	rows, err := s.db.Query(
+		`SELECT id, group_wxid, sender_wxid, src_db, local_id, create_time, content
+		 FROM messages WHERE scanned = 0 ORDER BY id LIMIT ?`, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -543,7 +597,8 @@ func (s *Store) UnscannedMessages(limit int) ([]UnscannedMessage, error) {
 	var out []UnscannedMessage
 	for rows.Next() {
 		var m UnscannedMessage
-		if err := rows.Scan(&m.ID, &m.Content); err != nil {
+		if err := rows.Scan(&m.ID, &m.GroupWxid, &m.SenderWxid, &m.SrcDB, &m.LocalID,
+			&m.CreateTime, &m.Content); err != nil {
 			return nil, err
 		}
 		out = append(out, m)

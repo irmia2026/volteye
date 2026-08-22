@@ -12,9 +12,87 @@ import (
 	"time"
 
 	"golang.org/x/sys/windows"
+	"golang.org/x/sys/windows/registry"
 )
 
 var msgDBNameRe = regexp.MustCompile(`(?i)^message(_\d+)?\.db$`)
+
+// filesRootFromRegistry reads the custom file-storage location the user may
+// have set in WeChat settings. Best-effort: key names differ between WeChat
+// versions, and the value may point at xwechat_files itself or its parent.
+func filesRootFromRegistry() []string {
+	var out []string
+	for _, probe := range []struct{ path, val string }{
+		{`Software\Tencent\Weixin`, "FileSavePath"},
+		{`Software\Tencent\WeChat`, "FileSavePath"},
+	} {
+		key, err := registry.OpenKey(registry.CURRENT_USER, probe.path, registry.QUERY_VALUE)
+		if err != nil {
+			continue
+		}
+		v, _, err := key.GetStringValue(probe.val)
+		key.Close()
+		if err != nil {
+			continue
+		}
+		v = strings.TrimSpace(v)
+		if v == "" || strings.EqualFold(v, "MyDocument") {
+			continue
+		}
+		out = append(out, v)
+	}
+	return out
+}
+
+// hasMessageDBs reports whether root looks like an xwechat_files directory.
+func hasMessageDBs(root string) bool {
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		return false
+	}
+	for _, e := range entries {
+		if !e.IsDir() || !strings.HasPrefix(e.Name(), "wxid_") {
+			continue
+		}
+		msgDir := filepath.Join(root, e.Name(), "db_storage", "message")
+		if files, err := os.ReadDir(msgDir); err == nil {
+			for _, f := range files {
+				if !f.IsDir() && msgDBNameRe.MatchString(f.Name()) {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
+// filesRootFromXwechatINI reads WeChat 4.x's own record of the files
+// location: %APPDATA%\Tencent\xwechat\config\<hash>.ini holds the parent
+// directory of xwechat_files (e.g. "D:\"). This is the pointer 4.x actually
+// maintains; the registry only keeps OldFileSavePath from migrations.
+func filesRootFromXwechatINI() []string {
+	cfgDir := filepath.Join(os.Getenv("APPDATA"), "Tencent", "xwechat", "config")
+	entries, err := os.ReadDir(cfgDir)
+	if err != nil {
+		return nil
+	}
+	var out []string
+	for _, e := range entries {
+		if e.IsDir() || !strings.EqualFold(filepath.Ext(e.Name()), ".ini") {
+			continue
+		}
+		data, err := os.ReadFile(filepath.Join(cfgDir, e.Name()))
+		if err != nil {
+			continue
+		}
+		v := strings.TrimSpace(string(data))
+		if v == "" || !strings.Contains(v, `:\`) {
+			continue
+		}
+		out = append(out, v)
+	}
+	return out
+}
 
 func DefaultDBStorage() (string, error) {
 	home, err := os.UserHomeDir()
@@ -22,13 +100,29 @@ func DefaultDBStorage() (string, error) {
 		return "", err
 	}
 	var roots []string
-	if _, err := os.Stat(filepath.Join(home, "Documents", "xwechat_files")); err == nil {
-		roots = append(roots, filepath.Join(home, "Documents", "xwechat_files"))
-	}
-	for _, drive := range "CDEFGHIJKLMNOPQRSTUVWXYZ" {
-		p := string(drive) + `:\xwechat_files`
-		if _, err := os.Stat(p); err == nil {
+	seen := map[string]bool{}
+	add := func(p string) {
+		if p == "" || seen[p] {
+			return
+		}
+		seen[p] = true
+		if hasMessageDBs(p) {
 			roots = append(roots, p)
+		}
+	}
+	// registry (3.x / migrated installs) and the 4.x config ini may point at
+	// xwechat_files itself or its parent directory
+	for _, v := range append(filesRootFromRegistry(), filesRootFromXwechatINI()...) {
+		add(v)
+		add(filepath.Join(v, "xwechat_files"))
+		add(filepath.Join(v, "xwechat files"))
+	}
+	// default locations; some installs name the folder "xwechat files" (with a space)
+	for _, name := range []string{"xwechat_files", "xwechat files"} {
+		add(filepath.Join(home, "Documents", name))
+		add(filepath.Join(home, name))
+		for _, drive := range "CDEFGHIJKLMNOPQRSTUVWXYZ" {
+			add(string(drive) + `:\` + name)
 		}
 	}
 	type cand struct {

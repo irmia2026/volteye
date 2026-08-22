@@ -97,12 +97,12 @@ func TestMessagesAndRulesPanels(t *testing.T) {
 		return bytes.Contains(out, []byte("群管理"))
 	}, teatest.WithCheckInterval(50*time.Millisecond), teatest.WithDuration(5*time.Second))
 
-	tm.Send(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'3'}})
+	tm.Send(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'4'}})
 	teatest.WaitFor(t, tm.Output(), func(out []byte) bool {
 		return bytes.Contains(out, []byte("城北台区低压抢修")) && bytes.Contains(out, []byte("供电所值班群"))
 	}, teatest.WithCheckInterval(50*time.Millisecond), teatest.WithDuration(5*time.Second))
 
-	tm.Send(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'4'}})
+	tm.Send(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'6'}})
 	teatest.WaitFor(t, tm.Output(), func(out []byte) bool {
 		return bytes.Contains(out, []byte("启用")) && bytes.Contains(out, []byte("工单,报修"))
 	}, teatest.WithCheckInterval(50*time.Millisecond), teatest.WithDuration(5*time.Second))

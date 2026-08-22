@@ -38,6 +38,22 @@ func pageHMAC(macKey, page []byte, pageNum uint32) []byte {
 	return mac.Sum(nil)
 }
 
+// ReadSalt reads the 16-byte salt stored at the start of page 1 of an
+// encrypted db. The salt is all that WAL decryption ever needs from the
+// encrypted main db, so callers can avoid keeping a full encrypted copy.
+func ReadSalt(path string) ([]byte, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	salt := make([]byte, SaltSize)
+	if _, err := io.ReadFull(f, salt); err != nil {
+		return nil, fmt.Errorf("main db too small for salt")
+	}
+	return salt, nil
+}
+
 func VerifyPage1Key(rawKey, page1 []byte) bool {
 	if len(rawKey) != KeySize || len(page1) < PageSize {
 		return false

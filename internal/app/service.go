@@ -10,6 +10,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"volteye/internal/capture"
 	"volteye/internal/cleanup"
 	"volteye/internal/export"
 	"volteye/internal/extract"
@@ -34,12 +35,13 @@ type Config struct {
 }
 
 type Service struct {
-	St      *store.Store
-	Col     *sync.Collector
-	Engine  *extract.Engine
-	DataDir string
-	DBPath  string
-	ExePath string
+	St       *store.Store
+	Col      *sync.Collector
+	Engine   *extract.Engine
+	Registry *capture.Registry
+	DataDir  string
+	DBPath   string
+	ExePath  string
 
 	onEvent func(Event)
 	cancel  context.CancelFunc
@@ -53,13 +55,14 @@ func NewService(st *store.Store, col *sync.Collector, engine *extract.Engine, da
 	}
 	exe, _ := os.Executable()
 	return &Service{
-		St:      st,
-		Col:     col,
-		Engine:  engine,
-		DataDir: dataDir,
-		DBPath:  filepath.Join(dataDir, "volteye.db"),
-		ExePath: exe,
-		onEvent: onEvent,
+		St:       st,
+		Col:      col,
+		Engine:   engine,
+		Registry: capture.NewRegistry(),
+		DataDir:  dataDir,
+		DBPath:   filepath.Join(dataDir, "volteye.db"),
+		ExePath:  exe,
+		onEvent:  onEvent,
 	}
 }
 
@@ -151,6 +154,11 @@ func Boot(cfg Config, step func(string)) (*Service, error) {
 	} else if n := svc.Engine.Count(); n > 0 {
 		step(fmt.Sprintf("已加载 %d 条识别规则", n))
 	}
+	if err := svc.ReloadFormats(); err != nil {
+		step("格式编译警告: " + err.Error())
+	} else if n := svc.Registry.Count(); n > 0 {
+		step(fmt.Sprintf("已加载 %d 个工单格式", n))
+	}
 
 	total, named, err := sync.DiscoverGroups(ds, rawKey, encDir, decDir, st)
 	if err != nil {
@@ -177,7 +185,8 @@ func Boot(cfg Config, step func(string)) (*Service, error) {
 		OnPollDone: func(n int) {
 			svc.emit(Event{At: time.Now(), Poll: true, Inserted: n})
 		},
-		Matcher: svc.Engine,
+		Matcher:  svc.Engine,
+		Registry: svc.Registry,
 	}, st)
 	if v, err := strconv.Atoi(st.GetSetting("poll_interval_ms", "")); err == nil && v > 0 {
 		col.SetInterval(time.Duration(v) * time.Millisecond)
@@ -270,6 +279,76 @@ func (s *Service) SetRuleEnabled(id int64, enabled bool) error {
 
 func (s *Service) RescanAll() (int64, error) {
 	return s.St.ResetScanned()
+}
+
+// ---------------------------------------------------------------------------
+// work-order formats
+// ---------------------------------------------------------------------------
+
+func (s *Service) ReloadFormats() error {
+	cfgs, err := s.St.ListFormats()
+	if err != nil {
+		return err
+	}
+	return s.Registry.Load(cfgs)
+}
+
+// probeFormat validates a config by compiling it, without touching the DB.
+func probeFormat(f capture.FormatConfig) error {
+	f.Enabled = true
+	_, err := capture.CompileFormat(f)
+	return err
+}
+
+func (s *Service) AddFormat(f capture.FormatConfig) error {
+	f.Name = strings.TrimSpace(f.Name)
+	if f.Name == "" {
+		return fmt.Errorf("格式名称不能为空")
+	}
+	if strings.TrimSpace(f.Signature) == "" {
+		return fmt.Errorf("签名正则不能为空")
+	}
+	if err := probeFormat(f); err != nil {
+		return err
+	}
+	if _, err := s.St.AddFormat(f); err != nil {
+		return err
+	}
+	return s.ReloadFormats()
+}
+
+func (s *Service) UpdateFormat(f capture.FormatConfig) error {
+	if err := probeFormat(f); err != nil {
+		return err
+	}
+	if err := s.St.UpdateFormat(f); err != nil {
+		return err
+	}
+	return s.ReloadFormats()
+}
+
+func (s *Service) DeleteFormat(id int64) error {
+	if err := s.St.DeleteFormat(id); err != nil {
+		return err
+	}
+	return s.ReloadFormats()
+}
+
+func (s *Service) SetFormatEnabled(id int64, enabled bool) error {
+	if err := s.St.SetFormatEnabled(id, enabled); err != nil {
+		return err
+	}
+	return s.ReloadFormats()
+}
+
+func (s *Service) ExportWorkOrders(f store.WorkOrderFilter, outPath string) (int, error) {
+	return export.WorkOrdersXLSX(s.St, f, outPath)
+}
+
+// AppendWorkOrders adds new orders to an existing VoltEye export file,
+// skipping order numbers already present and preserving manual edits.
+func (s *Service) AppendWorkOrders(f store.WorkOrderFilter, outPath string) (int, error) {
+	return export.AppendWorkOrdersXLSX(s.St, f, outPath)
 }
 
 func (s *Service) ExportMessages(opts export.Options, outPath string) (int, error) {

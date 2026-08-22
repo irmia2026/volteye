@@ -1,6 +1,7 @@
 package sync
 
 import (
+	"os"
 	"path/filepath"
 
 	"volteye/internal/store"
@@ -14,7 +15,9 @@ func DiscoverGroups(dbStorage string, key []byte, encDir, decDir string, st *sto
 		encCopy := filepath.Join(encDir, "_session.db")
 		decPath := filepath.Join(decDir, "_session.db")
 		if err := wechatdb.CopyFile(sessDB, encCopy); err == nil {
-			if _, err := wechatdb.DecryptDB(key, encCopy, decPath); err == nil {
+			_, err := wechatdb.DecryptDB(key, encCopy, decPath)
+			os.Remove(encCopy)
+			if err == nil {
 				if db, err := wechatdb.OpenDB(decPath); err == nil {
 					roomOrder, _ = wechatdb.ListChatrooms(db)
 					db.Close()
@@ -26,7 +29,9 @@ func DiscoverGroups(dbStorage string, key []byte, encDir, decDir string, st *sto
 		encCopy := filepath.Join(encDir, "_contact.db")
 		decPath := filepath.Join(decDir, "_contact.db")
 		if err := wechatdb.CopyFile(contactDB, encCopy); err == nil {
-			if _, err := wechatdb.DecryptDB(key, encCopy, decPath); err == nil {
+			_, err := wechatdb.DecryptDB(key, encCopy, decPath)
+			os.Remove(encCopy)
+			if err == nil {
 				if db, err := wechatdb.OpenDB(decPath); err == nil {
 					names = wechatdb.ChatroomNames(db)
 					db.Close()

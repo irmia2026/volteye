@@ -16,22 +16,29 @@ type groupsLoadedMsg struct {
 }
 
 type groupsPanel struct {
-	st      *store.Store
-	groups  []store.Group
-	counts  map[string]int64
-	cursor  int
-	offset  int
-	w, h    int
-	status  string
-	editing bool
-	input   textinput.Model
+	st         *store.Store
+	groups     []store.Group
+	view       []store.Group
+	counts     map[string]int64
+	cursor     int
+	offset     int
+	w, h       int
+	status     string
+	editing    bool
+	input      textinput.Model
+	searching  bool
+	search     textinput.Model
+	filterText string
 }
 
 func newGroupsPanel(st *store.Store) Panel {
 	ti := textinput.New()
 	ti.Placeholder = "输入备注名，回车保存，Esc 取消，留空清除"
 	ti.CharLimit = 32
-	return &groupsPanel{st: st, input: ti}
+	si := textinput.New()
+	si.Placeholder = "搜索群名 / 备注 / wxid，回车确认，Esc 取消"
+	si.CharLimit = 64
+	return &groupsPanel{st: st, input: ti, search: si}
 }
 
 func (p *groupsPanel) Title() string { return "群管理" }
@@ -40,11 +47,18 @@ func (p *groupsPanel) Help() string {
 	if p.editing {
 		return "回车 保存备注 · Esc 取消"
 	}
-	return "↑↓ 移动 · 空格 监控 · b 回填 · e 备注 · r 刷新"
+	if p.searching {
+		return "回车 应用 · Esc 取消"
+	}
+	return "↑↓ 移动 · 空格 监控 · b 回填 · e 备注 · / 搜索 · c 清搜索 · r 刷新"
 }
 
-func (p *groupsPanel) CapturesInput() bool { return p.editing }
-func (p *groupsPanel) SetSize(w, h int)    { p.w, p.h = w, h; p.input.Width = w - 16 }
+func (p *groupsPanel) CapturesInput() bool { return p.editing || p.searching }
+func (p *groupsPanel) SetSize(w, h int) {
+	p.w, p.h = w, h
+	p.input.Width = w - 16
+	p.search.Width = w - 16
+}
 
 func (p *groupsPanel) Init() tea.Cmd { return p.reload }
 
@@ -57,11 +71,30 @@ func (p *groupsPanel) reload() tea.Msg {
 	return groupsLoadedMsg{groups: groups, counts: counts}
 }
 
+// applyFilter rebuilds the visible view from the current filter text,
+// matching name, alias and wxid case-insensitively.
+func (p *groupsPanel) applyFilter() {
+	kw := strings.ToLower(strings.TrimSpace(p.filterText))
+	p.view = p.view[:0]
+	for _, g := range p.groups {
+		if kw == "" ||
+			strings.Contains(strings.ToLower(g.Name), kw) ||
+			strings.Contains(strings.ToLower(g.Alias), kw) ||
+			strings.Contains(strings.ToLower(g.Wxid), kw) {
+			p.view = append(p.view, g)
+		}
+	}
+	if p.cursor >= len(p.view) {
+		p.cursor = max(0, len(p.view)-1)
+	}
+	p.clamp()
+}
+
 func (p *groupsPanel) current() *store.Group {
-	if p.cursor < 0 || p.cursor >= len(p.groups) {
+	if p.cursor < 0 || p.cursor >= len(p.view) {
 		return nil
 	}
-	return &p.groups[p.cursor]
+	return &p.view[p.cursor]
 }
 
 func (p *groupsPanel) pageSize() int {
@@ -85,13 +118,30 @@ func (p *groupsPanel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case groupsLoadedMsg:
 		p.groups = msg.groups
 		p.counts = msg.counts
-		if p.cursor >= len(p.groups) {
-			p.cursor = max(0, len(p.groups)-1)
-		}
+		p.applyFilter()
 		return p, nil
 	case pollTickMsg:
 		return p, p.reload
 	case tea.KeyMsg:
+		if p.searching {
+			switch msg.String() {
+			case "enter":
+				p.filterText = strings.TrimSpace(p.search.Value())
+				p.searching = false
+				p.search.Blur()
+				p.cursor = 0
+				p.offset = 0
+				p.applyFilter()
+				return p, nil
+			case "esc":
+				p.searching = false
+				p.search.Blur()
+				return p, nil
+			}
+			var cmd tea.Cmd
+			p.search, cmd = p.search.Update(msg)
+			return p, cmd
+		}
 		if p.editing {
 			switch msg.String() {
 			case "enter":
@@ -122,17 +172,29 @@ func (p *groupsPanel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				p.cursor--
 			}
 		case "down", "j":
-			if p.cursor < len(p.groups)-1 {
+			if p.cursor < len(p.view)-1 {
 				p.cursor++
 			}
 		case "pgup":
 			p.cursor = max(0, p.cursor-p.pageSize())
 		case "pgdown":
-			p.cursor = min(len(p.groups)-1, p.cursor+p.pageSize())
+			p.cursor = min(len(p.view)-1, p.cursor+p.pageSize())
 		case "home":
 			p.cursor = 0
 		case "end":
-			p.cursor = max(0, len(p.groups)-1)
+			p.cursor = max(0, len(p.view)-1)
+		case "/":
+			p.searching = true
+			p.search.SetValue(p.filterText)
+			return p, p.search.Focus()
+		case "c":
+			if p.filterText != "" {
+				p.filterText = ""
+				p.cursor = 0
+				p.offset = 0
+				p.applyFilter()
+			}
+			return p, nil
 		case " ":
 			if g := p.current(); g != nil {
 				if err := p.st.SetMonitored(g.Wxid, !g.Monitored); err != nil {
@@ -169,13 +231,17 @@ func (p *groupsPanel) View() string {
 	sb.WriteString("  " + stTableHead.Render(header) + "\n")
 	sb.WriteString("  " + rule(min(p.w-4, 90)) + "\n")
 
-	if len(p.groups) == 0 {
-		sb.WriteString("  " + stMuted.Render("没有群聊记录") + "\n")
+	if len(p.view) == 0 {
+		if p.filterText != "" {
+			sb.WriteString("  " + stMuted.Render("没有匹配「"+p.filterText+"」的群，按 c 清除搜索") + "\n")
+		} else {
+			sb.WriteString("  " + stMuted.Render("没有群聊记录") + "\n")
+		}
 		return sb.String()
 	}
-	end := min(len(p.groups), p.offset+p.pageSize())
+	end := min(len(p.view), p.offset+p.pageSize())
 	for i := p.offset; i < end; i++ {
-		g := p.groups[i]
+		g := p.view[i]
 		mon := stFaint.Render("○")
 		if g.Monitored {
 			mon = stOk.Render("●")
@@ -202,10 +268,18 @@ func (p *groupsPanel) View() string {
 		}
 		sb.WriteString(line + "\n")
 	}
-	sb.WriteString("\n  " + stFaint.Render(fmt.Sprintf("%d/%d 群 · ● 监控 %d 群",
-		p.cursor+1, len(p.groups), countMonitored(p.groups))))
+	if p.filterText != "" {
+		sb.WriteString("\n  " + stFaint.Render(fmt.Sprintf("搜索「%s」 %d/%d 群 · ● 监控 %d 群",
+			p.filterText, p.cursor+1, len(p.view), countMonitored(p.view))))
+	} else {
+		sb.WriteString("\n  " + stFaint.Render(fmt.Sprintf("%d/%d 群 · ● 监控 %d 群",
+			p.cursor+1, len(p.view), countMonitored(p.view))))
+	}
 	if p.editing {
 		sb.WriteString("\n  " + stLabel.Render("备注: ") + p.input.View())
+	}
+	if p.searching {
+		sb.WriteString("\n  " + stLabel.Render("搜索: ") + p.search.View())
 	}
 	if p.status != "" {
 		sb.WriteString("\n  " + stBad.Render(p.status))

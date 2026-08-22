@@ -10,6 +10,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"volteye/internal/capture"
 	"volteye/internal/store"
 	"volteye/internal/wechatdb"
 )
@@ -27,6 +28,7 @@ type Config struct {
 	Logf         func(string)
 	OnPollDone   func(inserted int)
 	Matcher      Matcher
+	Registry     *capture.Registry
 }
 
 type fileSig struct {
@@ -100,6 +102,13 @@ func (c *Collector) Init() error {
 			return err
 		}
 	}
+	// enc/ only holds transient copies during decrypt; drop leftovers from
+	// previous runs so disk usage stays at one decrypted mirror per shard.
+	if entries, err := os.ReadDir(c.encDir); err == nil {
+		for _, e := range entries {
+			os.Remove(filepath.Join(c.encDir, e.Name()))
+		}
+	}
 	return nil
 }
 
@@ -115,12 +124,17 @@ func (c *Collector) refresh() {
 					c.log("copy %s failed: %v", base, err)
 					continue
 				}
-				if _, err := wechatdb.DecryptDB(c.cfg.Key, encCopy, decPath); err != nil {
+				// The encrypted copy is only an intermediate for decrypt;
+				// remove it right away so no full enc mirror persists.
+				_, err := wechatdb.DecryptDB(c.cfg.Key, encCopy, decPath)
+				os.Remove(encCopy)
+				if err != nil {
 					c.log("decrypt %s failed: %v", base, err)
 					continue
 				}
 				c.sigs[src] = sig
 				os.Remove(decPath + "-wal")
+				os.Remove(encCopy + "-wal")
 				delete(c.sigs, walSigKey(src))
 			}
 		}
@@ -128,12 +142,19 @@ func (c *Collector) refresh() {
 		walSrc := walSigKey(src)
 		if sig, ok := sigOf(walSrc); ok {
 			if prev, seen := c.sigs[walSrc]; !seen || prev != sig {
+				salt, err := wechatdb.ReadSalt(src)
+				if err != nil {
+					c.log("read salt %s failed: %v", base, err)
+					continue
+				}
 				walCopy := encCopy + "-wal"
 				if err := wechatdb.CopyFile(walSrc, walCopy); err != nil {
 					c.log("copy wal %s failed: %v", base, err)
 					continue
 				}
-				if _, err := wechatdb.DecryptWAL(c.cfg.Key, encCopy, walCopy, decPath+"-wal"); err != nil {
+				_, err = wechatdb.DecryptWAL(c.cfg.Key, salt, walCopy, decPath+"-wal")
+				os.Remove(walCopy)
+				if err != nil {
 					c.log("decrypt wal %s failed: %v", base, err)
 					continue
 				}
@@ -141,6 +162,7 @@ func (c *Collector) refresh() {
 			}
 		} else {
 			os.Remove(decPath + "-wal")
+			os.Remove(encCopy + "-wal")
 			delete(c.sigs, walSrc)
 		}
 	}
@@ -314,7 +336,7 @@ func (c *Collector) syncShard(g store.Group, table, decPath string) (int, error)
 }
 
 func (c *Collector) applyMatching() {
-	if c.cfg.Matcher == nil {
+	if c.cfg.Matcher == nil && c.cfg.Registry == nil {
 		return
 	}
 	for {
@@ -327,10 +349,15 @@ func (c *Collector) applyMatching() {
 			return
 		}
 		for _, m := range rows {
-			hits := c.cfg.Matcher.Match(m.Content)
 			var ids []string
-			for _, id := range hits {
-				ids = append(ids, strconv.FormatInt(id, 10))
+			if c.cfg.Matcher != nil {
+				hits := c.cfg.Matcher.Match(m.Content)
+				for _, id := range hits {
+					ids = append(ids, strconv.FormatInt(id, 10))
+				}
+			}
+			if c.cfg.Registry != nil {
+				c.extractOrders(m)
 			}
 			if err := c.st.MarkMessageScanned(m.ID, strings.Join(ids, ",")); err != nil {
 				c.log("mark message %d failed: %v", m.ID, err)
@@ -339,6 +366,38 @@ func (c *Collector) applyMatching() {
 		if len(rows) < 500 {
 			return
 		}
+	}
+}
+
+// extractOrders runs the format registry over one message. Signature hits
+// that fail to parse are recorded in parse_errors so format drift surfaces
+// instead of silently dropping orders.
+func (c *Collector) extractOrders(m store.UnscannedMessage) {
+	orders, err := c.cfg.Registry.Extract(capture.Message{
+		ID:         m.ID,
+		GroupWxid:  m.GroupWxid,
+		SenderWxid: m.SenderWxid,
+		SrcDB:      m.SrcDB,
+		LocalID:    m.LocalID,
+		CreateTime: m.CreateTime,
+		Content:    m.Content,
+	})
+	if err != nil {
+		if e := c.st.InsertParseError(m.ID, "", err.Error(), m.Content); e != nil {
+			c.log("record parse error failed: %v", e)
+		}
+		c.log("工单解析失败(msg %d): %v", m.ID, err)
+	}
+	if len(orders) == 0 {
+		return
+	}
+	n, err := c.st.InsertWorkOrders(orders)
+	if err != nil {
+		c.log("insert work orders failed: %v", err)
+		return
+	}
+	if n > 0 {
+		c.log("新工单 +%d [%s]", n, orders[0].OrderNo)
 	}
 }
 

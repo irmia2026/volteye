@@ -112,7 +112,9 @@ func main() {
 		encCopy := filepath.Join(encDir, "_session.db")
 		decPath := filepath.Join(decDir, "_session.db")
 		if err := wechatdb.CopyFile(sessDB, encCopy); err == nil {
-			if _, err := wechatdb.DecryptDB(rawKey, encCopy, decPath); err == nil {
+			_, derr := wechatdb.DecryptDB(rawKey, encCopy, decPath)
+			os.Remove(encCopy)
+			if derr == nil {
 				if db, err := wechatdb.OpenDB(decPath); err == nil {
 					rooms, err := wechatdb.ListChatrooms(db)
 					db.Close()
@@ -154,6 +156,7 @@ func main() {
 		pages, err := wechatdb.DecryptDB(rawKey, encCopy, decPath)
 		if err != nil {
 			fmt.Println("    [!] decrypt failed:", base, err)
+			os.Remove(encCopy)
 			continue
 		}
 		fmt.Printf("    [+] %-18s %8d pages  %s\n", base, pages, time.Since(t0).Round(time.Millisecond))
@@ -163,15 +166,19 @@ func main() {
 			if st, err := os.Stat(walSrc); err == nil && st.Size() > int64(wechatdb.PageSize) {
 				walCopy := encCopy + "-wal"
 				if err := wechatdb.CopyFile(walSrc, walCopy); err == nil {
-					frames, err := wechatdb.DecryptWAL(rawKey, encCopy, walCopy, decPath+"-wal")
-					if err != nil {
+					salt, serr := wechatdb.ReadSalt(encCopy)
+					if serr != nil {
+						fmt.Println("    [!] read salt failed:", base, serr)
+					} else if frames, err := wechatdb.DecryptWAL(rawKey, salt, walCopy, decPath+"-wal"); err != nil {
 						fmt.Println("    [!] wal decrypt failed:", base, err)
 					} else {
 						fmt.Printf("    [+] %-18s %8d wal frames decrypted\n", base+"-wal", frames)
 					}
+					os.Remove(walCopy)
 				}
 			}
 		}
+		os.Remove(encCopy)
 		decs = append(decs, decEntry{base, decPath})
 	}
 

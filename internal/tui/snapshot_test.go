@@ -83,7 +83,7 @@ func TestSnapshotLayout(t *testing.T) {
 		m = drainCmd(m, p.Init())
 	}
 
-	titles := []string{"总览", "群管理", "消息流", "规则", "导出", "设置", "日志"}
+	titles := []string{"总览", "群管理", "工单", "消息流", "格式", "规则", "导出", "设置", "日志"}
 	for i := range m.panels {
 		m.active = i
 		fmt.Printf("===== %s =====\n", titles[i])

@@ -103,7 +103,9 @@ func (m *rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.panels = []Panel{
 			newOverviewPanel(m.svc.St),
 			newGroupsPanel(m.svc.St),
+			newWorkOrdersPanel(m.svc),
 			newMessagesPanel(m.svc.St, m.svc.Engine),
+			newFormatsPanel(m.svc),
 			newRulesPanel(m.svc),
 			newExportPanel(m.svc),
 			newSettingsPanel(m.svc),

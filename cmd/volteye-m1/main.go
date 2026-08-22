@@ -11,6 +11,7 @@ import (
 	"syscall"
 	"time"
 
+	"volteye/internal/capture"
 	"volteye/internal/store"
 	"volteye/internal/sync"
 	"volteye/internal/wechatdb"
@@ -100,7 +101,9 @@ func main() {
 			}
 		}
 		if err := wechatdb.CopyFile(sessDB, encCopy); err == nil {
-			if _, err := wechatdb.DecryptDB(rawKey, encCopy, decPath); err == nil {
+			_, derr := wechatdb.DecryptDB(rawKey, encCopy, decPath)
+			os.Remove(encCopy)
+			if derr == nil {
 				if db, err := wechatdb.OpenDB(decPath); err == nil {
 					roomOrder, _ = wechatdb.ListChatrooms(db)
 					db.Close()
@@ -112,7 +115,9 @@ func main() {
 		encCopy := filepath.Join(workDir, "enc", "_contact.db")
 		decPath := filepath.Join(workDir, "dec", "_contact.db")
 		if err := wechatdb.CopyFile(contactDB, encCopy); err == nil {
-			if _, err := wechatdb.DecryptDB(rawKey, encCopy, decPath); err == nil {
+			_, derr := wechatdb.DecryptDB(rawKey, encCopy, decPath)
+			os.Remove(encCopy)
+			if derr == nil {
 				if db, err := wechatdb.OpenDB(decPath); err == nil {
 					names = wechatdb.ChatroomNames(db)
 					db.Close()
@@ -194,6 +199,12 @@ func main() {
 		fmt.Printf("    %s (%s) backfill=%v done=%v\n", g.Wxid, g.Name, g.Backfill, g.BackfillDone)
 	}
 
+	reg := capture.NewRegistry()
+	if cfgs, err := st.ListFormats(); err == nil {
+		if err := reg.Load(cfgs); err != nil {
+			fmt.Println("[!] format registry load failed:", err)
+		}
+	}
 	c := sync.New(sync.Config{
 		DBStorage: ds,
 		Key:       rawKey,
@@ -202,6 +213,7 @@ func main() {
 		Logf: func(s string) {
 			fmt.Printf("%s %s\n", time.Now().Format("15:04:05"), s)
 		},
+		Registry: reg,
 	}, st)
 	if err := c.Init(); err != nil {
 		fatal(err)

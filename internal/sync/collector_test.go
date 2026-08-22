@@ -10,6 +10,7 @@ import (
 
 	_ "modernc.org/sqlite"
 
+	"volteye/internal/capture"
 	"volteye/internal/store"
 	"volteye/internal/wechatdb"
 )
@@ -242,5 +243,90 @@ func TestRefreshFailureDoesNotCacheSig(t *testing.T) {
 	c.refresh()
 	if len(c.sigs) != 0 {
 		t.Fatalf("retry must keep sig uncached, got %v", c.sigs)
+	}
+}
+
+const sampleOrderMsg = "【南方电网】【电网管理平台】尊敬的用户：您有一条新的工单，请及时处理！故障单号为：【DY2026080218290204xxx】，工单派工时间为：【2026-08-02 18:29】，故障地址：【海南省定安县】，报障描述：【客户反映一户停电。】，联系人：【女士】，联系电话：【13876655xxx】。"
+
+func TestApplyMatchingExtractsWorkOrders(t *testing.T) {
+	st, err := store.Open(filepath.Join(t.TempDir(), "s.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+
+	reg := capture.NewRegistry()
+	if err := reg.Load(capture.DefaultFormats()); err != nil {
+		t.Fatal(err)
+	}
+	c := newTestCollector(t, st)
+	c.cfg.Registry = reg
+
+	insert := func(srcDB string, localID, createTime int64) {
+		if _, err := st.InsertMessages([]store.Message{
+			{GroupWxid: "g@chatroom", SrcDB: srcDB, LocalID: localID, CreateTime: createTime, Content: sampleOrderMsg},
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	insert("message_0.db", 1, 1780000000)
+	c.applyMatching()
+
+	orders, err := st.QueryWorkOrders(store.WorkOrderFilter{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(orders) != 1 {
+		t.Fatalf("got %d work orders, want 1", len(orders))
+	}
+	if orders[0].OrderNo != "DY2026080218290204xxx" || orders[0].ContactPhone != "13876655xxx" {
+		t.Fatalf("unexpected order: %+v", orders[0])
+	}
+	if orders[0].GroupWxid != "g@chatroom" || orders[0].SrcDB != "message_0.db" || orders[0].LocalID != 1 {
+		t.Fatalf("trace fields lost: %+v", orders[0])
+	}
+
+	// 同一单号再次落库(消息主键不同) -> 解析成功但 work_orders 去重
+	insert("message_1.db", 9, 1780000100)
+	c.applyMatching()
+	if n, _ := st.WorkOrderCount(); n != 1 {
+		t.Fatalf("duplicate order_no must be ignored, got %d", n)
+	}
+	if n, _ := st.ParseErrorCount(); n != 0 {
+		t.Fatalf("unexpected parse errors: %d", n)
+	}
+}
+
+func TestApplyMatchingRecordsParseError(t *testing.T) {
+	st, err := store.Open(filepath.Join(t.TempDir(), "s.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+
+	reg := capture.NewRegistry()
+	if err := reg.Load(capture.DefaultFormats()); err != nil {
+		t.Fatal(err)
+	}
+	c := newTestCollector(t, st)
+	c.cfg.Registry = reg
+
+	// 签名命中但工单号为空 -> 解析失败必须记录,不能静默丢单
+	broken := "【南方电网】尊敬的用户：您有一条[新]工单到达，工作单号为：[]，地址为：[海口市]"
+	if _, err := st.InsertMessages([]store.Message{
+		{GroupWxid: "g@chatroom", SrcDB: "message_0.db", LocalID: 1, CreateTime: 1780000000, Content: broken},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	c.applyMatching()
+	errs, err := st.ListParseErrors(10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(errs) != 1 {
+		t.Fatalf("got %d parse errors, want 1", len(errs))
+	}
+	if errs[0].MessageID == 0 || errs[0].Reason == "" {
+		t.Fatalf("parse error not recorded properly: %+v", errs[0])
 	}
 }
