@@ -5,3 +5,4 @@ dist/
 tmp_*/
 客户*
 工单汇总模板*
+docs/*.docx

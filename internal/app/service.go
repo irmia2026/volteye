@@ -341,14 +341,26 @@ func (s *Service) SetFormatEnabled(id int64, enabled bool) error {
 	return s.ReloadFormats()
 }
 
+func (s *Service) logExport(op, path string, n int, err error) {
+	if err != nil {
+		s.emit(Event{At: time.Now(), Text: fmt.Sprintf("%s失败: %v", op, err)})
+		return
+	}
+	s.emit(Event{At: time.Now(), Text: fmt.Sprintf("%s: %d 条 → %s", op, n, path)})
+}
+
 func (s *Service) ExportWorkOrders(f store.WorkOrderFilter, outPath string) (int, error) {
-	return export.WorkOrdersXLSX(s.St, f, outPath)
+	n, err := export.WorkOrdersXLSX(s.St, f, outPath)
+	s.logExport("导出工单", outPath, n, err)
+	return n, err
 }
 
 // AppendWorkOrders adds new orders to an existing VoltEye export file,
 // skipping order numbers already present and preserving manual edits.
 func (s *Service) AppendWorkOrders(f store.WorkOrderFilter, outPath string) (int, error) {
-	return export.AppendWorkOrdersXLSX(s.St, f, outPath)
+	n, err := export.AppendWorkOrdersXLSX(s.St, f, outPath)
+	s.logExport("追加工单", outPath, n, err)
+	return n, err
 }
 
 func (s *Service) ExportMessages(opts export.Options, outPath string) (int, error) {

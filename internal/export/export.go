@@ -1,11 +1,14 @@
 package export
 
 import (
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
+	"syscall"
 	"time"
 	"unicode/utf8"
 
@@ -407,12 +410,60 @@ func WorkOrdersXLSX(st *store.Store, filter store.WorkOrderFilter, outPath strin
 // preserving any manual edits (是否完成, remark columns). Orders whose
 // 工作单号 already exists in the target sheet are skipped.
 func AppendWorkOrdersXLSX(st *store.Store, filter store.WorkOrderFilter, outPath string) (int, error) {
+	if fi, err := os.Stat(outPath); err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return 0, fmt.Errorf("文件不存在: %s\n追加是把新工单合并到「已经导出过的表格」里；如果要生成新表格，请使用导出新表", outPath)
+		}
+		return 0, classifyIOError(outPath, err)
+	} else if fi.IsDir() {
+		return 0, fmt.Errorf("追加目标是一个文件夹，不是 Excel 文件: %s", outPath)
+	}
+	if !strings.EqualFold(filepath.Ext(outPath), ".xlsx") {
+		return 0, fmt.Errorf("追加目标必须是 .xlsx 表格文件: %s", outPath)
+	}
+	// Probe writability up front: Save rewrites the whole file, so a file
+	// open in Excel/WPS must be detected before doing any work.
+	probe, err := os.OpenFile(outPath, os.O_RDWR, 0)
+	if err != nil {
+		return 0, classifyIOError(outPath, err)
+	}
+	probe.Close()
 	f, err := excelize.OpenFile(outPath)
 	if err != nil {
-		return 0, fmt.Errorf("打开追加目标失败: %w", err)
+		return 0, fmt.Errorf("无法解析该文件，追加目标必须是 VoltEye 导出的 .xlsx 表格: %s (%v)", outPath, err)
 	}
 	defer f.Close()
-	return writeWorkOrders(f, st, filter, func() error { return f.Save() })
+	return writeWorkOrders(f, st, filter, func() error {
+		if err := f.Save(); err != nil {
+			return classifyIOError(outPath, err)
+		}
+		return nil
+	})
+}
+
+// classifyIOError turns low-level OS/zip errors into actionable Chinese
+// diagnostics for the TUI and logs.
+func classifyIOError(path string, err error) error {
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		return fmt.Errorf("文件不存在，请检查路径是否正确: %s", path)
+	case isSharingViolation(err):
+		return fmt.Errorf("文件正被 Excel/WPS 占用，请先关闭该表格再重试: %s", path)
+	case errors.Is(err, fs.ErrPermission):
+		return fmt.Errorf("没有该文件的读写权限: %s", path)
+	default:
+		return fmt.Errorf("文件读写失败: %s (%v)", path, err)
+	}
+}
+
+// isSharingViolation reports whether err is a Windows file-lock error
+// (ERROR_SHARING_VIOLATION 32 / ERROR_LOCK_VIOLATION 33).
+func isSharingViolation(err error) bool {
+	var errno syscall.Errno
+	if errors.As(err, &errno) {
+		return errno == 32 || errno == 33
+	}
+	return false
 }
 
 func lastCol() string {

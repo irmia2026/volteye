@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -20,9 +21,10 @@ type workOrdersLoadedMsg struct {
 }
 
 type workOrderExportMsg struct {
-	count int
-	path  string
-	err   error
+	count  int
+	path   string
+	append bool
+	err    error
 }
 
 type workOrdersPanel struct {
@@ -105,9 +107,16 @@ func (p *workOrdersPanel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return p, nil
 	case workOrderExportMsg:
 		p.exporting = false
-		if msg.err != nil {
-			p.status = "导出失败: " + msg.err.Error()
-		} else {
+		switch {
+		case msg.err != nil:
+			p.status = "失败: " + msg.err.Error()
+		case msg.count == 0 && msg.append:
+			p.status = "目标表已是最新，没有需要追加的新工单"
+		case msg.count == 0:
+			p.status = "没有可导出的工单（当前过滤条件下为 0 条）"
+		case msg.append:
+			p.status = fmt.Sprintf("已追加 %d 条新工单 → %s", msg.count, msg.path)
+		default:
 			p.status = fmt.Sprintf("已导出 %d 条工单 → %s", msg.count, msg.path)
 		}
 		return p, nil
@@ -117,7 +126,8 @@ func (p *workOrdersPanel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if p.enteringPath {
 			switch msg.String() {
 			case "enter":
-				path := strings.TrimSpace(p.pathInput.Value())
+				// tolerate paths pasted with surrounding quotes
+				path := strings.Trim(strings.TrimSpace(p.pathInput.Value()), `"'`)
 				p.enteringPath = false
 				p.pathInput.Blur()
 				if path == "" {
@@ -129,7 +139,7 @@ func (p *workOrdersPanel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				filter := store.WorkOrderFilter{Keyword: p.filterText}
 				return p, func() tea.Msg {
 					n, err := p.svc.AppendWorkOrders(filter, path)
-					return workOrderExportMsg{count: n, path: path + " (追加)", err: err}
+					return workOrderExportMsg{count: n, path: path, append: true, err: err}
 				}
 			case "esc":
 				p.enteringPath = false
@@ -200,7 +210,7 @@ func (p *workOrdersPanel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "a":
 			if !p.exporting {
 				p.enteringPath = true
-				p.pathInput.SetValue(p.st.GetSetting("last_append_path", ""))
+				p.pathInput.SetValue(p.defaultAppendPath())
 				return p, p.pathInput.Focus()
 			}
 		case "r":
@@ -317,6 +327,29 @@ func (p *workOrdersPanel) viewErrors() string {
 		sb.WriteString(line + "\n")
 	}
 	return sb.String()
+}
+
+// defaultAppendPath prefers the newest export in dataDir\exports, then the
+// path used last time, so the user rarely has to type a path at all.
+func (p *workOrdersPanel) defaultAppendPath() string {
+	exportsDir := filepath.Join(p.svc.DataDir, "exports")
+	var newest string
+	var newestTime time.Time
+	if entries, err := os.ReadDir(exportsDir); err == nil {
+		for _, e := range entries {
+			if e.IsDir() || !strings.HasSuffix(strings.ToLower(e.Name()), ".xlsx") {
+				continue
+			}
+			if fi, err := e.Info(); err == nil && fi.ModTime().After(newestTime) {
+				newestTime = fi.ModTime()
+				newest = filepath.Join(exportsDir, e.Name())
+			}
+		}
+	}
+	if newest != "" {
+		return newest
+	}
+	return p.st.GetSetting("last_append_path", "")
 }
 
 func (p *workOrdersPanel) currentOrder() *capture.WorkOrder {

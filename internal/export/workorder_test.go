@@ -1,7 +1,9 @@
 package export
 
 import (
+	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -102,6 +104,44 @@ func TestWorkOrdersLayoutAndRouting(t *testing.T) {
 	}
 	if zx[4][1] != "意见" || zx[4][2] != "其他" || zx[4][3] != "未识别到" {
 		t.Fatalf("2-level split wrong: %v", zx[4][:4])
+	}
+}
+
+func TestAppendErrorDiagnostics(t *testing.T) {
+	dir := t.TempDir()
+	st, err := store.Open(filepath.Join(dir, "t.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	seedOrders(t, st)
+
+	// 不存在的路径 -> 明确提示不存在并引导用新表
+	_, err = AppendWorkOrdersXLSX(st, store.WorkOrderFilter{}, filepath.Join(dir, "不存在.xlsx"))
+	if err == nil || !strings.Contains(err.Error(), "文件不存在") || !strings.Contains(err.Error(), "导出新表") {
+		t.Fatalf("not-exist error unhelpful: %v", err)
+	}
+
+	// 非 .xlsx 扩展名
+	txt := filepath.Join(dir, "a.txt")
+	os.WriteFile(txt, []byte("hello"), 0644)
+	_, err = AppendWorkOrdersXLSX(st, store.WorkOrderFilter{}, txt)
+	if err == nil || !strings.Contains(err.Error(), ".xlsx") {
+		t.Fatalf("extension error unhelpful: %v", err)
+	}
+
+	// 内容是文本但扩展名是 xlsx -> 提示不是有效表格
+	fake := filepath.Join(dir, "fake.xlsx")
+	os.WriteFile(fake, []byte("not a zip"), 0644)
+	_, err = AppendWorkOrdersXLSX(st, store.WorkOrderFilter{}, fake)
+	if err == nil || !strings.Contains(err.Error(), "无法解析") {
+		t.Fatalf("invalid-xlsx error unhelpful: %v", err)
+	}
+
+	// 目标是文件夹
+	_, err = AppendWorkOrdersXLSX(st, store.WorkOrderFilter{}, dir)
+	if err == nil || !strings.Contains(err.Error(), "文件夹") {
+		t.Fatalf("directory error unhelpful: %v", err)
 	}
 }
 
