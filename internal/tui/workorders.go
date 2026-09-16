@@ -119,6 +119,11 @@ func (p *workOrdersPanel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		default:
 			p.status = fmt.Sprintf("已导出 %d 条工单 → %s", msg.count, msg.path)
 		}
+		// only remember the append target after a successful append, so a
+		// bogus path never sticks as the default
+		if msg.err == nil && msg.append {
+			_ = p.st.SetSetting("last_append_path", msg.path)
+		}
 		return p, nil
 	case pollTickMsg:
 		return p, p.reload
@@ -133,7 +138,6 @@ func (p *workOrdersPanel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if path == "" {
 					return p, nil
 				}
-				_ = p.st.SetSetting("last_append_path", path)
 				p.exporting = true
 				p.status = ""
 				filter := store.WorkOrderFilter{Keyword: p.filterText}
@@ -209,8 +213,13 @@ func (p *workOrdersPanel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		case "a":
 			if !p.exporting {
+				path := p.defaultAppendPath()
+				if path == "" {
+					p.status = "还没有导出过的表格；请先按 x 导出新表，之后才能追加"
+					return p, nil
+				}
 				p.enteringPath = true
-				p.pathInput.SetValue(p.defaultAppendPath())
+				p.pathInput.SetValue(path)
 				return p, p.pathInput.Focus()
 			}
 		case "r":
